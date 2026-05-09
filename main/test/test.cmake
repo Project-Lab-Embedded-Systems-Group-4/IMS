@@ -12,3 +12,8 @@ if(SPI_TEST)
   list(APPEND APP_SRCS "test/src/test_spi.c")
   list(APPEND APP_INC_DIRS "test/include")
 endif()
+
+if(UART_TEST)
+  list(APPEND APP_SRCS "test/src/test_uart.c")
+  list(APPEND APP_INC_DIRS "test/include")
+endif()

@@ -4,6 +4,7 @@ set(APP_INC_DIRS "")
 #set(GPIO_TEST ON) 
 #set(I2C_TEST ON)
 #set(SPI_TEST ON)
+#set(UART_TEST ON)
 
 include("${CMAKE_CURRENT_LIST_DIR}/test/test.cmake")
 
@@ -21,4 +22,8 @@ endif()
 
 if(SPI_TEST)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SPI_TEST=1)
+endif()
+
+if(UART_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE UART_TEST=1)
 endif()

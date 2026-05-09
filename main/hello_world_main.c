@@ -25,6 +25,10 @@
 #include "test_spi.h"
 #endif
 
+#ifdef UART_TEST
+#include "test_uart.h"
+#endif
+
 void app_main(void)
 {
     printf("Hello world!\n");
@@ -39,6 +43,10 @@ void app_main(void)
 
 #ifdef SPI_TEST
     test_spi_run();
+#endif
+
+#ifdef UART_TEST
+    test_uart_run();
 #endif
 
     /* Print chip information */
