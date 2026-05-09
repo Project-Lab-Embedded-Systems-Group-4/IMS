@@ -1,33 +1,33 @@
-#include <stdio.h>
-#include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "test_uart.h"
 #include "driver/uart.h"
 #include "espidf-drivers/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "ims-mcu-driver/uart.h"
-#include "test_uart.h"
+#include <stdio.h>
+#include <string.h>
 
 #define UART1_TX_PIN 17
 #define UART1_RX_PIN 16
 #define UART2_TX_PIN 33
 #define UART2_RX_PIN 32
 
-void test_uart_run(void)
-{
+void test_uart_run(void) {
     printf("Starting UART Master-Slave Test...\n");
 
     // 1. Initialize UART1
-    static struct ims_device uart1_dev = { .name = "uart1" };
+    static struct ims_device uart1_dev = {.name = "uart1"};
     static struct espidf_uart_config uart1_cfg = {
         .uart_port = UART_NUM_1,
-        .uart_config = {
-            .baud_rate = 115200,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-            .source_clk = UART_SCLK_DEFAULT,
-        },
+        .uart_config =
+            {
+                .baud_rate = 115200,
+                .data_bits = UART_DATA_8_BITS,
+                .parity = UART_PARITY_DISABLE,
+                .stop_bits = UART_STOP_BITS_1,
+                .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+                .source_clk = UART_SCLK_DEFAULT,
+            },
         .tx_pin = UART1_TX_PIN,
         .rx_pin = UART1_RX_PIN,
         .rts_pin = -1,
@@ -44,17 +44,18 @@ void test_uart_run(void)
     }
 
     // 2. Initialize UART2
-    static struct ims_device uart2_dev = { .name = "uart2" };
+    static struct ims_device uart2_dev = {.name = "uart2"};
     static struct espidf_uart_config uart2_cfg = {
         .uart_port = UART_NUM_2,
-        .uart_config = {
-            .baud_rate = 115200,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-            .source_clk = UART_SCLK_DEFAULT,
-        },
+        .uart_config =
+            {
+                .baud_rate = 115200,
+                .data_bits = UART_DATA_8_BITS,
+                .parity = UART_PARITY_DISABLE,
+                .stop_bits = UART_STOP_BITS_1,
+                .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+                .source_clk = UART_SCLK_DEFAULT,
+            },
         .tx_pin = UART2_TX_PIN,
         .rx_pin = UART2_RX_PIN,
         .rts_pin = -1,
