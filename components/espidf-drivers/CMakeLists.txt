@@ -1,4 +1,4 @@
-set(srcs "src/gpio.c" "src/i2c.c")
+set(srcs "src/gpio.c" "src/i2c.c" "src/spi.c")
 
 set(required_components driver soc esp_eth esp_rom hal esp_common)
 
