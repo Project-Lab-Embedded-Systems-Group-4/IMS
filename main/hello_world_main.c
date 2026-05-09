@@ -13,30 +13,25 @@
 #include "esp_flash.h"
 #include "esp_system.h"
 
-#include "espidf-drivers/gpio.h"
-#include "ims-mcu-driver/gpio.h"
+#ifdef GPIO_TEST
+#include "test_gpio.h"
+#endif
 
-#define TEST_GPIO_PIN 2
+#ifdef I2C_TEST
+#include "test_i2c.h"
+#endif
 
 void app_main(void)
 {
     printf("Hello world!\n");
 
-    /* Initialize IMS GPIO Driver */
-    static struct ims_device gpio_dev = { .name = "esp-gpio" };
-    static struct espidf_gpio_config gpio_config;
-    static struct espidf_gpio_data gpio_data;
+#ifdef GPIO_TEST
+    test_gpio_run();
+#endif
 
-    // Configure pin 2 as output
-    gpio_config.pins[TEST_GPIO_PIN].enable = true;
-    gpio_config.pins[TEST_GPIO_PIN].flags = IMS_GPIO_FLAGS_OUTPUT;
-
-    esp_err_t err = espidf_gpio_init(&gpio_dev, &gpio_config, &gpio_data);
-    if (err != ESP_OK) {
-        printf("Failed to initialize GPIO driver: %d\n", err);
-    } else {
-        printf("GPIO driver initialized successfully\n");
-    }
+#ifdef I2C_TEST
+    test_i2c_run();
+#endif
 
     /* Print chip information */
     esp_chip_info_t chip_info;
@@ -63,14 +58,10 @@ void app_main(void)
 
     printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
-    int level = 0;
     for (int i = 10; i >= 0; i--) {
-        printf("Toggling GPIO %d to %d... (%d seconds left)\n", TEST_GPIO_PIN, level, i);
-        ims_gpio_port_pin_set(&gpio_dev, TEST_GPIO_PIN, level ? IMS_GPIO_LEVEL_HIGH : IMS_GPIO_LEVEL_LOW);
-        level = !level;
+        printf("Restarting in %d seconds...\n", i);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-
     printf("Restarting now.\n");
     fflush(stdout);
     esp_restart();

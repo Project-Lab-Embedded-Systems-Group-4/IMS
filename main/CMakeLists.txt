@@ -1,3 +1,19 @@
-idf_component_register(SRCS "hello_world_main.c"
+set(APP_SRCS "hello_world_main.c")
+set(APP_INC_DIRS "")
+
+set(GPIO_TEST ON) 
+set(I2C_TEST ON)
+
+include("${CMAKE_CURRENT_LIST_DIR}/test/test.cmake")
+
+idf_component_register(SRCS "${APP_SRCS}"
                        PRIV_REQUIRES spi_flash espidf-drivers
-                       INCLUDE_DIRS "")
+                       INCLUDE_DIRS "${APP_INC_DIRS}")
+
+if(GPIO_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE GPIO_TEST=1)
+endif()
+
+if(I2C_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE I2C_TEST=1)
+endif()
