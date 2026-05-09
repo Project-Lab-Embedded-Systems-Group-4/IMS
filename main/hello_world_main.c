@@ -21,6 +21,10 @@
 #include "test_i2c.h"
 #endif
 
+#ifdef SPI_TEST
+#include "test_spi.h"
+#endif
+
 void app_main(void)
 {
     printf("Hello world!\n");
@@ -31,6 +35,10 @@ void app_main(void)
 
 #ifdef I2C_TEST
     test_i2c_run();
+#endif
+
+#ifdef SPI_TEST
+    test_spi_run();
 #endif
 
     /* Print chip information */
