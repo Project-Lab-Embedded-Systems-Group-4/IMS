@@ -49,6 +49,7 @@ static void init_console(void) {
 
     /* Register Commands */
     register_system();
+    register_i2c_tool_command();
     register_gpio_pin_command(40); // Max GPIOs
 
     /* Start console REPL */

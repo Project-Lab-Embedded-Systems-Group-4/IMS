@@ -3,6 +3,7 @@ set(APP_SRCS
     "board.c"
     "cmd/cmd_system.c"
     "cmd/cmd_gpio_pin.c"
+    "cmd/cmd_i2c_tool.c"
 )
 set(APP_INC_DIRS "include" "cmd")
 
