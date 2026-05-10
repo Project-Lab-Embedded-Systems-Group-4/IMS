@@ -14,6 +14,12 @@
 /* Internal Clock Speed */
 #define AD5933_INTERNAL_CLOCK_FREQ 16776000
 #define I2C_TIMEOUT_MS 100
+#define DEFAULT_START_FREQ_HZ 5000
+#define DEFAULT_INC_FREQ_HZ 10
+#define DEFAULT_NUM_INC 0
+#define DEFAULT_SETTLE_CYCLES (DEFAULT_START_FREQ_HZ / 2000 + 1)
+#define DEFAULT_VOLTAGE_RANGE AD5933_RANGE_200MV_PP
+#define DEFAULT_PGA_GAIN AD5933_PGA_GAIN_X1
 
 /* Internal Helpers */
 
@@ -65,6 +71,47 @@ int ad5933_set_ctrl_reg2(const struct ims_device *dev, ad5933_ctrl_reg2_t reg) {
 int ad5933_get_status_reg(const struct ims_device *dev,
                           ad5933_status_reg_t *reg) {
     return ad5933_read_raw_reg(dev, AD5933_REG_STATUS, &reg->raw);
+}
+
+int ad5933_get_start_freq(const struct ims_device *dev, uint32_t *freq_hz) {
+    struct ad5933_data *data = dev->data;
+    uint8_t b1, b2, b3;
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_START_FREQ_1, &b1));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_START_FREQ_2, &b2));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_START_FREQ_3, &b3));
+    uint32_t val = (b1 << 16) | (b2 << 8) | b3;
+    *freq_hz = (uint32_t)(((uint64_t)val * (data->clock_freq / 4)) >> 27);
+    return 0;
+}
+
+int ad5933_get_inc_freq(const struct ims_device *dev, uint32_t *freq_hz) {
+    struct ad5933_data *data = dev->data;
+    uint8_t b1, b2, b3;
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_INC_FREQ_1, &b1));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_INC_FREQ_2, &b2));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_INC_FREQ_3, &b3));
+    uint32_t val = (b1 << 16) | (b2 << 8) | b3;
+    *freq_hz = (uint32_t)(((uint64_t)val * (data->clock_freq / 4)) >> 27);
+    return 0;
+}
+
+int ad5933_get_num_inc(const struct ims_device *dev, uint16_t *num) {
+    uint8_t b1, b2;
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_NUM_INC_1, &b1));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_NUM_INC_2, &b2));
+    *num = ((b1 & 0x01) << 8) | b2;
+    return 0;
+}
+
+int ad5933_get_settling_cycles(const struct ims_device *dev, uint16_t *cycles,
+                               enum ad5933_settle_mul *mul) {
+    ad5933_settle_reg1_t reg1;
+    uint8_t b2;
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_SETTLE_1, &reg1.raw));
+    ERROR_CHECK(ad5933_read_raw_reg(dev, AD5933_REG_SETTLE_2, &b2));
+    *cycles = (reg1.msb_cycles << 8) | b2;
+    *mul = (enum ad5933_settle_mul)reg1.cycle_multiplier;
+    return 0;
 }
 
 int ad5933_set_start_freq(const struct ims_device *dev, uint32_t freq_hz) {
@@ -123,14 +170,16 @@ int ad5933_set_gain_factor(const struct ims_device *dev, double gain_factor) {
     return 0;
 }
 
-int ad5933_set_pga_gain(const struct ims_device *dev, enum ad5933_pga_gain gain) {
+int ad5933_set_pga_gain(const struct ims_device *dev,
+                        enum ad5933_pga_gain gain) {
     ad5933_ctrl_reg1_t reg;
     ERROR_CHECK(ad5933_get_ctrl_reg1(dev, &reg));
     reg.pga_gain = gain;
     return ad5933_set_ctrl_reg1(dev, reg);
 }
 
-int ad5933_set_voltage_range(const struct ims_device *dev, enum ad5933_voltage_range range) {
+int ad5933_set_voltage_range(const struct ims_device *dev,
+                             enum ad5933_voltage_range range) {
     ad5933_ctrl_reg1_t reg;
     ERROR_CHECK(ad5933_get_ctrl_reg1(dev, &reg));
     reg.output_voltage_range = range;
@@ -145,6 +194,11 @@ int ad5933_init(struct ims_device *dev, const struct ad5933_config *config,
     dev->data = data;
     memset(data, 0, sizeof(*data));
 
+    ERROR_CHECK(ad5933_reset(dev));
+
+    ERROR_CHECK(ad5933_get_ctrl_reg1(dev, &data->ctrl1));
+    ERROR_CHECK(ad5933_get_ctrl_reg2(dev, &data->ctrl2));
+
     if (config->ext_clock_freq > 0) {
         data->clock_freq = config->ext_clock_freq;
         data->ctrl2.clock_source = AD5933_CLK_EXT;
@@ -157,6 +211,15 @@ int ad5933_init(struct ims_device *dev, const struct ad5933_config *config,
     data->ctrl1.function_code = AD5933_FUNC_STANDBY;
     ERROR_CHECK(ad5933_set_ctrl_reg1(dev, data->ctrl1));
     ERROR_CHECK(ad5933_set_ctrl_reg2(dev, data->ctrl2));
+
+    /* Set defaults */
+    ERROR_CHECK(ad5933_set_start_freq(dev, DEFAULT_START_FREQ_HZ));
+    ERROR_CHECK(ad5933_set_inc_freq(dev, DEFAULT_INC_FREQ_HZ));
+    ERROR_CHECK(ad5933_set_num_inc(dev, DEFAULT_NUM_INC));
+    ERROR_CHECK(ad5933_set_settling_cycles(dev, DEFAULT_SETTLE_CYCLES,
+                                           AD5933_SETTLE_X1));
+    ERROR_CHECK(ad5933_set_voltage_range(dev, DEFAULT_VOLTAGE_RANGE));
+    ERROR_CHECK(ad5933_set_pga_gain(dev, DEFAULT_PGA_GAIN));
 
     return 0;
 }

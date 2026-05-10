@@ -154,6 +154,11 @@ int ad5933_get_ctrl_reg2(const struct ims_device *dev, ad5933_ctrl_reg2_t *reg);
 int ad5933_set_ctrl_reg2(const struct ims_device *dev, ad5933_ctrl_reg2_t reg);
 int ad5933_get_status_reg(const struct ims_device *dev, ad5933_status_reg_t *reg);
 
+int ad5933_get_start_freq(const struct ims_device *dev, uint32_t *freq_hz);
+int ad5933_get_inc_freq(const struct ims_device *dev, uint32_t *freq_hz);
+int ad5933_get_num_inc(const struct ims_device *dev, uint16_t *num);
+int ad5933_get_settling_cycles(const struct ims_device *dev, uint16_t *cycles, enum ad5933_settle_mul *mul);
+
 int ad5933_set_start_freq(const struct ims_device *dev, uint32_t freq_hz);
 int ad5933_set_inc_freq(const struct ims_device *dev, uint32_t freq_hz);
 int ad5933_set_num_inc(const struct ims_device *dev, uint16_t num);
