@@ -1,4 +1,4 @@
-set(srcs "src/gpio.c" "src/i2c.c" "src/spi.c" "src/uart.c")
+set(srcs "src/gpio.c" "src/i2c.c" "src/spi.c" "src/uart.c" "src/ad5933.c")
 
 set(required_components driver soc esp_eth esp_rom hal esp_common)
 
@@ -7,6 +7,7 @@ list(APPEND required_components
     esp_driver_i2c 
     esp_driver_spi 
     esp_driver_uart
+    esp_timer
 )
 
 idf_component_register(
