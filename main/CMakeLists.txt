@@ -1,12 +1,14 @@
 set(APP_SRCS 
     "hello_world_main.c" 
     "board.c"
+    "board_utils.c"
     "event.c"
     "service.c"
     "cmd/cmd_system.c"
     "cmd/cmd_gpio_pin.c"
     "cmd/cmd_i2c_tool.c"
     "cmd/cmd_ad5933.c"
+    "cmd/cmd_board_utils.c"
     "services/ad5933/ad5933_service.c"
 )
 set(APP_INC_DIRS "include" "cmd" "services/ad5933" ".")

@@ -75,6 +75,7 @@ static void init_console(void) {
     register_i2c_tool_command();
     register_gpio_pin_command(40); // Max GPIOs
     register_ad5933_command();
+    register_board_utils_command();
 
     /* Start console REPL */
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
