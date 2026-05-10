@@ -1,0 +1,3 @@
+#include "event.h"
+
+ESP_EVENT_DEFINE_BASE(IMS_EVENT_BASE);

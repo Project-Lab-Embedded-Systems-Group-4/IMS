@@ -1,0 +1,14 @@
+#ifndef IMS_EVENT_H_
+#define IMS_EVENT_H_
+
+#include <esp_event.h>
+
+ESP_EVENT_DECLARE_BASE(IMS_EVENT_BASE);
+
+enum ims_event {
+    IMS_EVENT_AD5933_START_SWEEP,
+    IMS_EVENT_AD5933_DATA_READY,
+    IMS_EVENT_AD5933_ERROR,
+};
+
+#endif // IMS_EVENT_H_

@@ -12,6 +12,7 @@
 #include "ims-mcu-driver/device.h"
 #include "ims-mcu-driver/gpio.h"
 #include "ims-mcu-driver/i2c.h"
+#include "ims-mcu-driver/sensor/ad5933.h"
 #include "ims-mcu-driver/spi.h"
 #include "ims-mcu-driver/util.h"
 
@@ -221,6 +222,22 @@ static struct espidf_spibus_config spi_bus_config = {
     .dma_chan = SPI_DMA_CH_AUTO,
 };
 
+static struct {
+    struct ims_device dev;
+    struct ad5933_config config;
+    struct ad5933_data data;
+} ad5933_nodes[] = {
+    {
+        .dev = {.name = "ad5933"},
+        .config =
+            {
+                .i2c_bus = &i2c_configs[0].dev,
+                .i2c_addr = AD5933_I2C_ADDR,
+                .ext_clock_freq = 0, // internal
+            },
+    },
+};
+
 static esp_err_t board_gpio_init(void) {
     for (int i = 0; i < ARRAY_SIZE(gpio_configs); i++) {
         ESP_ERROR_CHECK(espidf_gpio_init(&gpio_configs[i].dev,
@@ -257,11 +274,21 @@ static esp_err_t board_spi_init(void) {
     return ESP_OK;
 }
 
+static esp_err_t board_ad5933_init(void) {
+    for (int i = 0; i < ARRAY_SIZE(ad5933_nodes); i++) {
+        ESP_ERROR_CHECK(ad5933_init(&ad5933_nodes[i].dev,
+                                    &ad5933_nodes[i].config,
+                                    &ad5933_nodes[i].data));
+    }
+    return ESP_OK;
+}
+
 esp_err_t board_init(void) {
     ESP_ERROR_CHECK(board_gpio_init());
     ESP_ERROR_CHECK(board_gpio_pin_init());
     ESP_ERROR_CHECK(board_i2c_init());
     ESP_ERROR_CHECK(board_spi_init());
+    ESP_ERROR_CHECK(board_ad5933_init());
     return ESP_OK;
 }
 
@@ -279,6 +306,7 @@ const struct ims_device *board_get_device(const char *name) {
     FIND_DEVICE(gpio_pin_configs, name);
     FIND_DEVICE(i2c_configs, name);
     FIND_DEVICE(spi_configs, name);
+    FIND_DEVICE(ad5933_nodes, name);
 
 #undef FIND_DEVICE
     return NULL;

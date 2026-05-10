@@ -1,11 +1,15 @@
 set(APP_SRCS 
     "hello_world_main.c" 
     "board.c"
+    "event.c"
+    "service.c"
     "cmd/cmd_system.c"
     "cmd/cmd_gpio_pin.c"
     "cmd/cmd_i2c_tool.c"
+    "cmd/cmd_ad5933.c"
+    "services/ad5933/ad5933_service.c"
 )
-set(APP_INC_DIRS "include" "cmd")
+set(APP_INC_DIRS "include" "cmd" "services/ad5933" ".")
 
 # Option to enable GPIO test (can also be passed via: idf.py build -DGPIO_TEST=ON)
 #set(GPIO_TEST ON) 
@@ -14,7 +18,6 @@ set(APP_INC_DIRS "include" "cmd")
 #set(UART_TEST ON)
 
 include("${CMAKE_CURRENT_LIST_DIR}/test/test.cmake")
-
 
 set(priv_requires
     esp_driver_gpio 

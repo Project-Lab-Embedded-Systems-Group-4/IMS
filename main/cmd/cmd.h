@@ -43,5 +43,6 @@
 esp_err_t register_system(void);
 esp_err_t register_i2c_tool_command(void);
 esp_err_t register_gpio_pin_command(size_t max_num);
+esp_err_t register_ad5933_command(void);
 
 #endif // IMS_CMD_CMD_H_
