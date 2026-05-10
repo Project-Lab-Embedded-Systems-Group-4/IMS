@@ -1,5 +1,5 @@
 set(APP_SRCS 
-    "hello_world_main.c" 
+    "main.c" 
     "board.c"
     "board_utils.c"
     "event.c"
