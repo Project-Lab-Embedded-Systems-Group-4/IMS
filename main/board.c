@@ -276,7 +276,7 @@ static esp_err_t board_spi_init(void) {
 
 static esp_err_t board_ad5933_init(void) {
     for (int i = 0; i < ARRAY_SIZE(ad5933_nodes); i++) {
-        ESP_ERROR_CHECK(ad5933_init(&ad5933_nodes[i].dev,
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ad5933_init(&ad5933_nodes[i].dev,
                                     &ad5933_nodes[i].config,
                                     &ad5933_nodes[i].data));
     }

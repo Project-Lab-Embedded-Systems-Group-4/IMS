@@ -69,6 +69,13 @@ static void ad5933_service_task(void *arg) {
     struct ad5933_service_data *data = (struct ad5933_service_data *)s->data;
     const struct ims_device *ad_dev = cfg->ad5933_dev;
 
+    if (ad_dev == NULL) {
+        ESP_LOGE(TAG, "AD5933 device not found");
+        service_mark_done(s);
+        vTaskDelete(NULL);
+        return;
+    }
+
     ESP_LOGI(TAG, "AD5933 Service Task Started");
 
     while (service_need_stop(s) != ESP_OK) {

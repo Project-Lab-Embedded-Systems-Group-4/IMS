@@ -117,6 +117,26 @@ int ad5933_set_settling_cycles(const struct ims_device *dev, uint16_t cycles,
     return 0;
 }
 
+int ad5933_set_gain_factor(const struct ims_device *dev, double gain_factor) {
+    struct ad5933_data *data = dev->data;
+    data->gain_factor = gain_factor;
+    return 0;
+}
+
+int ad5933_set_pga_gain(const struct ims_device *dev, enum ad5933_pga_gain gain) {
+    ad5933_ctrl_reg1_t reg;
+    ERROR_CHECK(ad5933_get_ctrl_reg1(dev, &reg));
+    reg.pga_gain = gain;
+    return ad5933_set_ctrl_reg1(dev, reg);
+}
+
+int ad5933_set_voltage_range(const struct ims_device *dev, enum ad5933_voltage_range range) {
+    ad5933_ctrl_reg1_t reg;
+    ERROR_CHECK(ad5933_get_ctrl_reg1(dev, &reg));
+    reg.output_voltage_range = range;
+    return ad5933_set_ctrl_reg1(dev, reg);
+}
+
 /* Logic Implementation */
 
 int ad5933_init(struct ims_device *dev, const struct ad5933_config *config,
