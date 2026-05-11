@@ -16,9 +16,9 @@ static struct {
     struct arg_int *start;
     struct arg_int *inc;
     struct arg_int *num;
-    struct arg_dbl *gain;
     struct arg_int *pga;
     struct arg_int *range;
+    struct arg_int *fb;
     struct arg_end *end;
 } ad5933_args;
 
@@ -74,15 +74,15 @@ static int do_ad5933_info(const struct ims_device *dev) {
         break;
     }
     printf("\tVoltage:     %s\n", range_str);
-    printf("\tGain Factor: %e (Stored)\n", d->gain_factor);
 
     return 0;
 }
 
 static int do_ad5933_dump(void) {
     struct ad5933_sample_data *samples;
+    double *gain_factors;
     uint16_t count;
-    esp_err_t err = ad5933_service_get_results(&samples, &count);
+    esp_err_t err = ad5933_service_get_results(&samples, &gain_factors, &count);
 
     if (err == ESP_ERR_INVALID_STATE) {
         printf("Error: Sweep in progress or service not initialized.\n");
@@ -94,26 +94,43 @@ static int do_ad5933_dump(void) {
         return 0;
     }
 
-    const struct ims_device *dev = board_get_device("ad5933");
-    struct ad5933_data *drv_data = (struct ad5933_data *)dev->data;
-    double gf = drv_data->gain_factor;
-
-    printf("Gain Factor: %e\n", gf);
-    printf("%-6s | %-8s | %-8s | %-12s | %-15s\n", "Index", "Real", "Imag",
-           "Magnitude", "Impedance (Ohm)");
-    printf("-------|----------|----------|--------------|----------------\n");
+    printf("%-6s | %-8s | %-8s | %-12s | %-15s | %-15s\n", "Index", "Real", "Imag",
+           "Magnitude", "Gain Factor", "Impedance (Ohm)");
+    printf("-------|----------|----------|--------------|-----------------|----------------\n");
     for (int i = 0; i < count; i++) {
         double magnitude =
             sqrt((double)samples[i].real * samples[i].real +
                  (double)samples[i].imag * samples[i].imag);
+        double gf = gain_factors[i];
         double impedance = 0;
         if (gf != 0 && magnitude != 0) {
             impedance = 1.0 / (gf * magnitude);
         }
-        printf("%-6d | %-8d | %-8d | %-12.2f | %-15.2f\n", i, samples[i].real,
-               samples[i].imag, magnitude, impedance);
+        printf("%-6d | %-8d | %-8d | %-12.2f | %-15.2e | %-15.2f\n", i, samples[i].real,
+               samples[i].imag, magnitude, gf, impedance);
     }
 
+    return 0;
+}
+
+static int do_ad5933_cal(int fb_index) {
+    extern esp_event_loop_handle_t service_event_loop;
+    
+    if (fb_index < 0 || fb_index > 3) {
+        printf("Error: FB index must be 0-3\n");
+        return 1;
+    }
+
+    uint8_t fb = (uint8_t)fb_index;
+    esp_err_t err = esp_event_post_to(
+        service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_START_CAL,
+        &fb, sizeof(fb), portMAX_DELAY);
+    
+    if (err == ESP_OK) {
+        printf("AD5933 Calibration requested for FB index %d...\n", fb_index);
+    } else {
+        printf("Failed to request calibration: %s\n", esp_err_to_name(err));
+    }
     return 0;
 }
 
@@ -144,6 +161,12 @@ static int do_ad5933_cmd(int argc, char **argv) {
             printf("Failed to start sweep: %s\n", esp_err_to_name(err));
         }
         return 0;
+    } else if (strcmp(sub, "cal") == 0) {
+        int fb = 1; // Default FB 1
+        if (ad5933_args.fb->count > 0) {
+            fb = ad5933_args.fb->ival[0];
+        }
+        return do_ad5933_cal(fb);
     } else if (strcmp(sub, "dump") == 0) {
         return do_ad5933_dump();
     } else if (strcmp(sub, "set") == 0) {
@@ -153,8 +176,6 @@ static int do_ad5933_cmd(int argc, char **argv) {
             ad5933_set_inc_freq(dev, ad5933_args.inc->ival[0]);
         if (ad5933_args.num->count)
             ad5933_set_num_inc(dev, (uint16_t)ad5933_args.num->ival[0]);
-        if (ad5933_args.gain->count)
-            ad5933_set_gain_factor(dev, ad5933_args.gain->dval[0]);
         if (ad5933_args.pga->count) {
             int pga = ad5933_args.pga->ival[0];
             if (pga == 0 || pga == 1) {
@@ -181,18 +202,18 @@ static int do_ad5933_cmd(int argc, char **argv) {
 
 esp_err_t register_ad5933_command(void) {
     ad5933_args.subcommand =
-        arg_str1(NULL, NULL, "<info|sweep|dump|set|reset>", "Sub-command to execute");
+        arg_str1(NULL, NULL, "<info|sweep|dump|cal|set|reset>", "Sub-command to execute");
     ad5933_args.start = arg_int0("s", "start", "<Hz>", "Start frequency in Hz");
     ad5933_args.inc =
         arg_int0("i", "inc", "<Hz>", "Increment frequency in Hz");
     ad5933_args.num =
         arg_int0("n", "num", "<n>", "Number of increments (0-511)");
-    ad5933_args.gain = arg_dbl0("g", "gain", "<g>", "Gain factor (for 'set')");
     ad5933_args.pga =
         arg_int0("p", "pga", "<0|1>", "PGA Gain: 0=x5, 1=x1 (for 'set')");
     ad5933_args.range = arg_int0("r", "range", "<0-3>",
                                  "Range: 0=2V, 1=200mV, 2=400mV, 3=1V");
-    ad5933_args.end = arg_end(7);
+    ad5933_args.fb = arg_int0("f", "fb", "<0-3>", "ZM Feedback index (for 'cal'): 0:2k, 1:10k, 2:100k, 3:330k");
+    ad5933_args.end = arg_end(8);
 
     const esp_console_cmd_t cmd = {
         .command = "ad5933",
