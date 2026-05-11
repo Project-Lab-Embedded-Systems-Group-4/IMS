@@ -1,4 +1,4 @@
-set(srcs "src/gpio.c" "src/i2c.c" "src/spi.c" "src/uart.c" "src/ad5933.c")
+set(srcs "src/gpio.c" "src/i2c.c" "src/spi.c" "src/uart.c" "src/ad5933.c" "src/ad7680.c")
 
 set(required_components driver soc esp_eth esp_rom hal esp_common)
 
