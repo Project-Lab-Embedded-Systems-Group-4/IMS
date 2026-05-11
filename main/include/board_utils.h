@@ -67,6 +67,19 @@ struct board_utils_info {
 };
 
 /**
+ * @brief Lock the shared board resources (MUXes and Enable lines)
+ * 
+ * @param timeout_ms Timeout in milliseconds
+ * @return ESP_OK if locked, ESP_ERR_TIMEOUT if failed
+ */
+esp_err_t board_utils_lock(uint32_t timeout_ms);
+
+/**
+ * @brief Unlock the shared board resources
+ */
+void board_utils_unlock(void);
+
+/**
  * @brief Select the channel for ZM_SUBJ and R_SUBJ multiplexers (A0-A3)
  */
 esp_err_t board_set_subj_channel(enum board_subj_channel channel);

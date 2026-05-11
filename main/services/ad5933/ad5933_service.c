@@ -137,6 +137,13 @@ static void ad5933_service_task(void *arg) {
             break;
 
         case AD5933_STATE_STANDBY:
+            /* Lock shared board resources before starting measurement */
+            if (board_utils_lock(portMAX_DELAY) != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to lock board resources");
+                data->now_state = AD5933_STATE_IDLE;
+                break;
+            }
+
             /* Step 1: Place AD5933 into standby mode */
             ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
             ctrl1.function_code = AD5933_FUNC_STANDBY;
@@ -227,6 +234,8 @@ static void ad5933_service_task(void *arg) {
             ad5933_set_ctrl_reg1(ad_dev, ctrl1);
 
             board_measure_enable(false);
+            board_utils_unlock();
+
             esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
                               IMS_EVENT_AD5933_DATA_READY, NULL, 0,
                               portMAX_DELAY);

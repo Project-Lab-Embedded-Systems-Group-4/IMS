@@ -4,8 +4,8 @@
 #include <freertos/task.h>
 #include <stdlib.h>
 
-#include "event.h"
 #include "board_utils.h"
+#include "event.h"
 #include "services/ad7680/ad7680_service.h"
 
 #define TAG "ad7680_srv"
@@ -22,6 +22,13 @@ struct ad7680_service_data {
 #define DEFAULT_RM_CAL_CHANNEL BOARD_SUBJ_CH_CAL1
 
 static struct service *g_ad7680_srv = NULL;
+
+static double calculate_resistance(uint16_t adc_val, uint32_t r_ref) {
+    if (adc_val >= 65535) {
+        return -1.0; // Over range
+    }
+    return (double)r_ref * (double)adc_val / (65536.0 - (double)adc_val);
+}
 
 static void ad7680_event_handler(void *arg, esp_event_base_t base,
                                  int32_t event_id, void *event_data) {
@@ -48,10 +55,11 @@ static void ad7680_event_handler(void *arg, esp_event_base_t base,
             if (info.rm_range_index >= 0 && info.rm_range_index < 4) {
                 const uint32_t ref_res[] = RM_REF_RES_VALUES;
                 uint32_t r_ref = ref_res[info.rm_range_index];
-                
-                if (val < 65535) {
-                    double resistance = (double)r_ref * (double)val / (65536.0 - (double)val);
-                    printf("Measured Resistance: %.2f Ohm (Range Ref: %" PRIu32 " Ohm)\n",
+                double resistance = calculate_resistance(val, r_ref);
+
+                if (resistance >= 0) {
+                    printf("Measured Resistance: %.2f Ohm (Range Ref: %" PRIu32
+                           " Ohm)\n",
                            resistance, r_ref);
                 } else {
                     printf("Measured Resistance: Over Range\n");
@@ -75,20 +83,77 @@ static void ad7680_service_task(void *arg) {
 
     ESP_LOGI(TAG, "AD7680 Service Task Started");
 
+    const uint32_t ref_res[] = RM_REF_RES_VALUES;
+    const uint32_t cal_res[] = RM_CAL_RES_VALUES;
+    struct {
+        enum board_subj_channel ch;
+        enum board_rm_range range;
+        uint32_t expected;
+    } cal_points[] = {
+        {BOARD_SUBJ_CH_CAL1, BOARD_RM_RANGE_4, cal_res[0]},
+        {BOARD_SUBJ_CH_CAL2, BOARD_RM_RANGE_2, cal_res[1]},
+        {BOARD_SUBJ_CH_CAL3, BOARD_RM_RANGE_1, cal_res[2]},
+    };
+
+    /* Startup Calibration */
+    ESP_LOGI(TAG, "Starting Startup Calibration...");
+    if (board_utils_lock(portMAX_DELAY) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock board resources for calibration");
+        return;
+    }
+
+    board_measure_enable(true);
+    for (int i = 0; i < 3; i++) {
+        board_set_subj_channel(cal_points[i].ch);
+        board_set_rm_range(cal_points[i].range);
+        vTaskDelay(pdMS_TO_TICKS(50)); // Settle time
+        uint16_t val;
+        if (ad7680_read_averaging(cfg->ad7680_dev, &val, 64) == 0) {
+            uint32_t r_ref = ref_res[cal_points[i].range];
+            double resistance = calculate_resistance(val, r_ref);
+            if (resistance >= 0) {
+                ESP_LOGI(TAG,
+                         "CAL%d: Expected %" PRIu32
+                         " Ohm, Measured %.2f Ohm (Error: %.2f%%)",
+                         i + 1, cal_points[i].expected, resistance,
+                         (resistance - cal_points[i].expected) * 100.0 /
+                             cal_points[i].expected);
+            } else {
+                ESP_LOGE(TAG, "CAL%d: Over Range!", i + 1);
+            }
+        } else {
+            ESP_LOGE(TAG, "CAL%d: Read Failed!", i + 1);
+        }
+    }
+    board_measure_enable(false);
+    board_utils_unlock();
+    ESP_LOGI(TAG, "Startup Calibration Complete");
+
     while (service_need_stop(s) != ESP_OK) {
         if (xSemaphoreTake(data->start_sem, portMAX_DELAY) == pdTRUE) {
             uint16_t val;
-            if (ad7680_read_averaging(cfg->ad7680_dev, &val, data->iterations) == 0) {
+
+            if (board_utils_lock(portMAX_DELAY) != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to lock board resources for measurement");
+                continue;
+            }
+
+            board_measure_enable(true);
+            vTaskDelay(pdMS_TO_TICKS(10)); // Settle
+            if (ad7680_read_averaging(cfg->ad7680_dev, &val,
+                                      data->iterations) == 0) {
                 xSemaphoreTake(data->data_mutex, portMAX_DELAY);
                 data->last_value = val;
                 xSemaphoreGive(data->data_mutex);
 
                 esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
-                                  IMS_EVENT_AD7680_DATA_READY, &val, sizeof(val),
-                                  portMAX_DELAY);
+                                  IMS_EVENT_AD7680_DATA_READY, &val,
+                                  sizeof(val), portMAX_DELAY);
             } else {
                 ESP_LOGW(TAG, "Failed to read AD7680");
             }
+            board_measure_enable(false);
+            board_utils_unlock();
         }
     }
 
@@ -150,7 +215,8 @@ esp_err_t ad7680_service_get_value(uint16_t *out_value) {
     if (g_ad7680_srv == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    struct ad7680_service_data *data = (struct ad7680_service_data *)g_ad7680_srv->data;
+    struct ad7680_service_data *data =
+        (struct ad7680_service_data *)g_ad7680_srv->data;
 
     xSemaphoreTake(data->data_mutex, portMAX_DELAY);
     *out_value = data->last_value;

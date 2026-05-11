@@ -133,6 +133,4 @@ void app_main(void) {
 #ifdef UART_TEST
     test_uart_run();
 #endif
-
-    printf("\nApp main finished. Console and Services are running...\n");
 }

@@ -1,4 +1,6 @@
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <string.h>
 #include "board/board.h"
 #include "board_utils.h"
@@ -12,6 +14,31 @@ static struct board_utils_info g_board_info = {
     .rm_range_index = -1,
     .measure_enabled = false
 };
+
+static SemaphoreHandle_t g_resource_mutex = NULL;
+
+esp_err_t board_utils_init(void) {
+    if (g_resource_mutex == NULL) {
+        g_resource_mutex = xSemaphoreCreateMutex();
+    }
+    return (g_resource_mutex != NULL) ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+esp_err_t board_utils_lock(uint32_t timeout_ms) {
+    if (g_resource_mutex == NULL) {
+        board_utils_init();
+    }
+    if (xSemaphoreTake(g_resource_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        return ESP_OK;
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
+void board_utils_unlock(void) {
+    if (g_resource_mutex != NULL) {
+        xSemaphoreGive(g_resource_mutex);
+    }
+}
 
 esp_err_t board_set_subj_channel(enum board_subj_channel channel) {
     if ((int)channel > 15) return ESP_ERR_INVALID_ARG;
