@@ -231,7 +231,7 @@ static void ad5933_service_task(void *arg) {
             ad5933_set_ctrl_reg1(ad_dev, ctrl1);
 
             // TODO: Add timeout handling here
-            delay_ms = 0;
+            delay_ms = 100;
             data->now_state = AD5933_STATE_SWEEPING;
             break;
 
