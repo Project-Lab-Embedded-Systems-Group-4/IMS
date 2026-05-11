@@ -137,7 +137,6 @@ struct ad5933_data {
     uint16_t num_inc;
     uint16_t settling_cycles;
     enum ad5933_settle_mul settle_mul;
-    double gain_factor;
     int sweep_index;
     uint64_t start_time_us;
     uint64_t settling_time_us;
@@ -163,7 +162,6 @@ int ad5933_set_start_freq(const struct ims_device *dev, uint32_t freq_hz);
 int ad5933_set_inc_freq(const struct ims_device *dev, uint32_t freq_hz);
 int ad5933_set_num_inc(const struct ims_device *dev, uint16_t num);
 int ad5933_set_settling_cycles(const struct ims_device *dev, uint16_t cycles, enum ad5933_settle_mul mul);
-int ad5933_set_gain_factor(const struct ims_device *dev, double gain_factor);
 int ad5933_set_pga_gain(const struct ims_device *dev, enum ad5933_pga_gain gain);
 int ad5933_set_voltage_range(const struct ims_device *dev, enum ad5933_voltage_range range);
 

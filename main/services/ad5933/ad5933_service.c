@@ -16,6 +16,15 @@
 
 #define TAG "ad5933_srv"
 
+/* Default Sweep Configuration */
+#define AD5933_DEFAULT_START_FREQ_HZ 5000 
+#define AD5933_DEFAULT_INC_FREQ_HZ 10
+#define AD5933_DEFAULT_NUM_INC 10 
+#define AD5933_DEFAULT_SETTLE_CYCLES (AD5933_DEFAULT_START_FREQ_HZ / 2000 + 1)
+#define AD5933_DEFAULT_VOLTAGE_RANGE AD5933_RANGE_200MV_PP
+#define AD5933_DEFAULT_PGA_GAIN AD5933_PGA_GAIN_X1
+#define AD5933_READ_TIMEOUT_MS 100
+
 /* Calibration Defaults */
 #define AD5933_CALI_CHANNEL BOARD_SUBJ_CH_CAL2
 #define AD5933_CALI_RESISTOR 49900.0
@@ -23,33 +32,34 @@
 
 enum ad5933_service_state {
     AD5933_STATE_IDLE = 0,
+    AD5933_STATE_STANDBY,         /* Step 1 / Wait state */
     AD5933_STATE_CALIBRATE,       /* Startup Calibration */
-    AD5933_STATE_STANDBY,         /* Step 1 */
     AD5933_STATE_INIT_START_FREQ, /* Step 2 */
     AD5933_STATE_SWEEPING,        /* Step 3 */
     AD5933_STATE_READ_DATA,       /* Data Valid Poll */
-    AD5933_STATE_INCREMENTING,    /* Next Point */
-    AD5933_STATE_POWER_DOWN,      /* Finish */
     AD5933_STATE_MAX
 };
 
 static const char *state_names[] = {
-    "IDLE",     "CALIBRATE", "STANDBY",      "INIT_START_FREQ",
-    "SWEEPING", "READ_DATA", "INCREMENTING", "POWER_DOWN"};
+    "IDLE", "STANDBY", "CALIBRATE", "INIT_START_FREQ",
+    "SWEEPING", "READ_DATA"};
 
 #define MAX_SAMPLES 512
 
 struct ad5933_service_data {
     enum ad5933_service_state now_state;
     enum ad5933_service_state pre_state;
-    uint64_t state_start_time_us;
     SemaphoreHandle_t start_sem;
     SemaphoreHandle_t data_mutex;
 
     struct ad5933_sample_data samples[MAX_SAMPLES];
+    double gain_factors[MAX_SAMPLES];
     uint16_t sample_count;
 
     bool is_calibrating;
+    uint8_t cal_fb_index;
+    enum board_subj_channel cal_channel;
+    double cal_resistor;
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -62,31 +72,79 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
     if (base == IMS_EVENT_BASE) {
         switch (event_id) {
         case IMS_EVENT_AD5933_START_SWEEP:
+            data->is_calibrating = false;
             xSemaphoreGive(data->start_sem);
             break;
-        case IMS_EVENT_AD5933_DATA_READY: {
-            struct ad5933_service_config *cfg =
-                (struct ad5933_service_config *)s->config;
-            struct ad5933_data *drv_data =
-                (struct ad5933_data *)cfg->ad5933_dev->data;
-            double gf = drv_data->gain_factor;
+        case IMS_EVENT_AD5933_START_CAL: {
+            uint8_t fb_index = AD5933_CALI_FB_INDEX;
+            if (event_data != NULL) {
+                fb_index = *(uint8_t *)event_data;
+            }
 
-            printf("Gain Factor: %e\n", gf);
-            printf("%-6s | %-8s | %-8s | %-12s | %-15s\n", "Index", "Real",
-                   "Imag", "Magnitude", "Impedance (Ohm)");
-            printf("-------|----------|----------|--------------|----------------"
-                   "\n");
+            const uint32_t zm_cal_res[] = ZM_CAL_RES_VALUES;
+            data->cal_fb_index = fb_index;
+
+            if (fb_index == 0 || fb_index == 1) {
+                data->cal_channel = BOARD_SUBJ_CH_CAL1;
+                data->cal_resistor = (double)zm_cal_res[0];
+            } else if (fb_index == 2) {
+                data->cal_channel = BOARD_SUBJ_CH_CAL2;
+                data->cal_resistor = (double)zm_cal_res[1];
+            } else if (fb_index == 3) {
+                data->cal_channel = BOARD_SUBJ_CH_CAL3;
+                data->cal_resistor = (double)zm_cal_res[2];
+            } else {
+                // Invalid index, use defaults
+                data->cal_fb_index = AD5933_CALI_FB_INDEX;
+                data->cal_channel = AD5933_CALI_CHANNEL;
+                data->cal_resistor = AD5933_CALI_RESISTOR;
+            }
+
+            data->is_calibrating = true;
+            xSemaphoreGive(data->start_sem);
+            break;
+        }
+        case IMS_EVENT_AD5933_DATA_READY: {
+            bool was_cal = false;
+            if (event_data != NULL) {
+                was_cal = *(bool *)event_data;
+            }
+
+            if (was_cal) {
+                printf("Calibration complete. Calculating gain factors...\n");
+                for (int i = 0; i < data->sample_count; i++) {
+                    double magnitude =
+                        sqrt((double)data->samples[i].real * data->samples[i].real +
+                             (double)data->samples[i].imag * data->samples[i].imag);
+
+                    if (i >= sizeof(data->gain_factors) / sizeof(data->gain_factors[0])) {
+                        ESP_LOGW(TAG, "Sample count exceeds gain factor array size");
+                        break;
+                    }
+
+                    if (magnitude != 0) {
+                        data->gain_factors[i] = 1.0 / (magnitude * data->cal_resistor);
+                    } else {
+                        data->gain_factors[i] = 0;
+                    }
+                }
+            }
+
+            printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
+                   "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
+            printf("------|------------|------------|--------------|--------------|-----------------\n");
             for (int i = 0; i < data->sample_count; i++) {
                 double magnitude =
                     sqrt((double)data->samples[i].real * data->samples[i].real +
                          (double)data->samples[i].imag * data->samples[i].imag);
+                double gf = data->gain_factors[i];
                 double impedance = 0;
                 if (gf != 0 && magnitude != 0) {
                     impedance = 1.0 / (gf * magnitude);
                 }
-                printf("%-6d | %-8d | %-8d | %-12.2f | %-15.2f\n", i,
+                printf("%-5d | %-10d | %-10d | %-12.2f | %-12.2e | %-15.2f\n", i,
                        data->samples[i].real, data->samples[i].imag, magnitude,
-                       impedance);
+                       gf, impedance);
             }
             break;
         }
@@ -102,6 +160,7 @@ static void ad5933_service_task(void *arg) {
         (struct ad5933_service_config *)s->config;
     struct ad5933_service_data *data = (struct ad5933_service_data *)s->data;
     const struct ims_device *ad_dev = cfg->ad5933_dev;
+    bool is_cal = false;
 
     ESP_LOGI(TAG, "AD5933 Service Task Started");
 
@@ -115,36 +174,40 @@ static void ad5933_service_task(void *arg) {
                      state_names[data->pre_state],
                      state_names[data->now_state]);
             data->pre_state = data->now_state;
-            data->state_start_time_us = esp_timer_get_time();
         }
 
         switch (data->now_state) {
         case AD5933_STATE_IDLE:
+            ESP_ERROR_CHECK(ad5933_reset(ad_dev));
+
             xSemaphoreTake(data->start_sem, portMAX_DELAY);
-            data->now_state = AD5933_STATE_STANDBY;
-            data->is_calibrating = false;
+            if (data->is_calibrating) {
+                data->now_state = AD5933_STATE_CALIBRATE;
+            } else {
+                data->now_state = AD5933_STATE_STANDBY;
+            }
+
+            /* Lock shared board resources before starting measurement */
+            if (board_utils_lock(portMAX_DELAY) != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to lock board resources");
+                break;
+            }
+
             delay_ms = 0;
             break;
 
         case AD5933_STATE_CALIBRATE:
-            ESP_LOGI(TAG, "Starting Auto-Calibration...");
-            data->is_calibrating = true;
-            board_set_subj_channel(AD5933_CALI_CHANNEL);
-            board_set_zm_fb(AD5933_CALI_FB_INDEX);
+            ESP_LOGI(TAG, "Starting Auto-Calibration (FB:%d, CH:%d, R:%.0f)...", 
+                     data->cal_fb_index, data->cal_channel, data->cal_resistor);
+            board_set_subj_channel(data->cal_channel);
+            board_set_zm_fb(data->cal_fb_index);
 
             data->now_state = AD5933_STATE_STANDBY;
             delay_ms = 0;
             break;
 
         case AD5933_STATE_STANDBY:
-            /* Lock shared board resources before starting measurement */
-            if (board_utils_lock(portMAX_DELAY) != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to lock board resources");
-                data->now_state = AD5933_STATE_IDLE;
-                break;
-            }
 
-            /* Step 1: Place AD5933 into standby mode */
             ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
             ctrl1.function_code = AD5933_FUNC_STANDBY;
             ad5933_set_ctrl_reg1(ad_dev, ctrl1);
@@ -152,6 +215,8 @@ static void ad5933_service_task(void *arg) {
             xSemaphoreTake(data->data_mutex, portMAX_DELAY);
             data->sample_count = 0;
             xSemaphoreGive(data->data_mutex);
+
+            //ad5933_set_start_freq(ad_dev, drv_data->start_freq);
 
             board_measure_enable(true);
 
@@ -166,7 +231,7 @@ static void ad5933_service_task(void *arg) {
             ad5933_set_ctrl_reg1(ad_dev, ctrl1);
 
             // TODO: Add timeout handling here
-            delay_ms = 1;
+            delay_ms = 0;
             data->now_state = AD5933_STATE_SWEEPING;
             break;
 
@@ -180,70 +245,74 @@ static void ad5933_service_task(void *arg) {
             d->sweep_index = 0;
 
             data->now_state = AD5933_STATE_READ_DATA;
-            delay_ms = 0;
+            delay_ms = 1;
             break;
 
-        case AD5933_STATE_READ_DATA:
-            ad5933_get_status_reg(ad_dev, &status);
-            if (status.data_valid) {
-                int16_t real, imag;
-                if (ad5933_get_complex_data(ad_dev, &real, &imag, true) == 0) {
-                    if (data->is_calibrating) {
-                        double mag =
-                            sqrt((double)real * real + (double)imag * imag);
-                        double gf = 1.0 / (mag * AD5933_CALI_RESISTOR);
-                        ad5933_set_gain_factor(ad_dev, gf);
-                        ESP_LOGI(TAG, "Calibration Gain Factor: %e", gf);
-                    } else {
-                        xSemaphoreTake(data->data_mutex, portMAX_DELAY);
-                        if (data->sample_count < MAX_SAMPLES) {
-                            data->samples[data->sample_count].real = real;
-                            data->samples[data->sample_count].imag = imag;
-                            data->sample_count++;
-                        }
-                        xSemaphoreGive(data->data_mutex);
-                    }
-                }
+        case AD5933_STATE_READ_DATA: {
+            uint64_t wait_start = esp_timer_get_time();
+            bool timeout = false;
+            while (1) {
+                ad5933_get_status_reg(ad_dev, &status);
+                if (status.data_valid)
+                    break;
 
-                if (status.sweep_complete || data->is_calibrating) {
-                    data->now_state = AD5933_STATE_POWER_DOWN;
-                } else {
-                    data->now_state = AD5933_STATE_INCREMENTING;
+                if ((esp_timer_get_time() - wait_start) >
+                    (AD5933_READ_TIMEOUT_MS * 1000)) {
+                    ESP_LOGE(TAG, "Timeout waiting for data_valid");
+                    timeout = true;
+                    break;
                 }
-                delay_ms = 0;
-            } else {
-                delay_ms = 1;
+                vTaskDelay(pdMS_TO_TICKS(1));
             }
-            break;
 
-        case AD5933_STATE_INCREMENTING:
-            ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
-            ctrl1.function_code = AD5933_FUNC_INCREMENT_FREQ;
-            ad5933_set_ctrl_reg1(ad_dev, ctrl1);
+            if (timeout) {
+                board_measure_enable(false);
+                board_utils_unlock();
+                data->now_state = AD5933_STATE_IDLE;
+                break;
+            }
 
-            struct ad5933_data *d_inc = (struct ad5933_data *)ad_dev->data;
-            d_inc->sweep_index++;
+            int16_t real, imag;
+            if (ad5933_get_complex_data(ad_dev, &real, &imag, true) == 0) {
+                xSemaphoreTake(data->data_mutex, portMAX_DELAY);
+                if (data->sample_count < MAX_SAMPLES) {
+                    data->samples[data->sample_count].real = real;
+                    data->samples[data->sample_count].imag = imag;
+                    data->sample_count++;
+                }
+                xSemaphoreGive(data->data_mutex);
+            }
 
-            data->now_state = AD5933_STATE_READ_DATA;
+            if (status.sweep_complete) {
+                /* Finish: Power down and release resources */
+                ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
+                ctrl1.function_code = AD5933_FUNC_POWER_DOWN;
+                ad5933_set_ctrl_reg1(ad_dev, ctrl1);
+
+                board_measure_enable(false);
+                board_utils_unlock();
+
+                is_cal = data->is_calibrating;
+                esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
+                                  IMS_EVENT_AD5933_DATA_READY, &is_cal,
+                                  sizeof(is_cal), portMAX_DELAY);
+
+                data->now_state = AD5933_STATE_IDLE;
+                data->is_calibrating = false;
+            } else {
+                /* Increment frequency for the next point */
+                ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
+                ctrl1.function_code = AD5933_FUNC_INCREMENT_FREQ;
+                ad5933_set_ctrl_reg1(ad_dev, ctrl1);
+
+                struct ad5933_data *d_drv = (struct ad5933_data *)ad_dev->data;
+                d_drv->sweep_index++;
+
+                data->now_state = AD5933_STATE_READ_DATA;
+            }
             delay_ms = 0;
             break;
-
-        case AD5933_STATE_POWER_DOWN:
-            ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
-            ctrl1.function_code = AD5933_FUNC_POWER_DOWN;
-            ad5933_set_ctrl_reg1(ad_dev, ctrl1);
-
-            board_measure_enable(false);
-            board_utils_unlock();
-
-            esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
-                              IMS_EVENT_AD5933_DATA_READY, NULL, 0,
-                              portMAX_DELAY);
-
-            data->now_state = AD5933_STATE_IDLE;
-            data->is_calibrating = false;
-            delay_ms = 0;
-            break;
+        }
 
         default:
             data->now_state = AD5933_STATE_IDLE;
@@ -286,13 +355,28 @@ esp_err_t ad5933_service_init(struct service *s,
 
     data->start_sem = xSemaphoreCreateBinary();
     data->data_mutex = xSemaphoreCreateMutex();
-    data->now_state = AD5933_STATE_CALIBRATE;
-    data->pre_state = AD5933_STATE_MAX;
+    data->now_state = AD5933_STATE_IDLE;
+    data->pre_state = AD5933_STATE_IDLE;
+
+    data->cal_fb_index = AD5933_CALI_FB_INDEX;
+    data->cal_channel = AD5933_CALI_CHANNEL;
+    data->cal_resistor = AD5933_CALI_RESISTOR;
+    data->is_calibrating = true;
+    xSemaphoreGive(data->start_sem);
 
     s->api = &ad5933_api;
     s->config = config;
     s->data = data;
     s->name = "ad5933_srv";
+
+    /* Driver Initialization with defaults */
+    const struct ims_device *ad_dev = config->ad5933_dev;
+    ad5933_set_start_freq(ad_dev, AD5933_DEFAULT_START_FREQ_HZ);
+    ad5933_set_inc_freq(ad_dev, AD5933_DEFAULT_INC_FREQ_HZ);
+    ad5933_set_num_inc(ad_dev, AD5933_DEFAULT_NUM_INC);
+    ad5933_set_settling_cycles(ad_dev, AD5933_DEFAULT_SETTLE_CYCLES, AD5933_SETTLE_X1);
+    ad5933_set_voltage_range(ad_dev, AD5933_DEFAULT_VOLTAGE_RANGE);
+    ad5933_set_pga_gain(ad_dev, AD5933_DEFAULT_PGA_GAIN);
 
     g_ad5933_srv = s;
 
@@ -300,6 +384,7 @@ esp_err_t ad5933_service_init(struct service *s,
 }
 
 esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples,
+                                     double **out_gain_factors,
                                      uint16_t *out_count) {
     if (g_ad5933_srv == NULL)
         return ESP_ERR_INVALID_STATE;
@@ -311,6 +396,9 @@ esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples,
     }
 
     *out_samples = data->samples;
+    if (out_gain_factors) {
+        *out_gain_factors = data->gain_factors;
+    }
     *out_count = data->sample_count;
     return ESP_OK;
 }

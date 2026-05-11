@@ -21,9 +21,12 @@ esp_err_t ad5933_service_init(struct service *s, struct ad5933_service_config *c
  * @brief Get the last sweep results
  * 
  * @param out_samples Pointer to receive the buffer address
+ * @param out_gain_factors Pointer to receive the gain factors buffer address
  * @param out_count Pointer to receive the number of samples
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if a sweep is in progress
  */
-esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples, uint16_t *out_count);
+esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples,
+                                     double **out_gain_factors,
+                                     uint16_t *out_count);
 
 #endif // IMS_SERVICES_AD5933_SERVICE_H_

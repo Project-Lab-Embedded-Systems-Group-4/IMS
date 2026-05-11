@@ -14,12 +14,6 @@
 /* Internal Clock Speed */
 #define AD5933_INTERNAL_CLOCK_FREQ 16776000
 #define I2C_TIMEOUT_MS 100
-#define DEFAULT_START_FREQ_HZ 5000
-#define DEFAULT_INC_FREQ_HZ 10
-#define DEFAULT_NUM_INC 0
-#define DEFAULT_SETTLE_CYCLES (DEFAULT_START_FREQ_HZ / 2000 + 1)
-#define DEFAULT_VOLTAGE_RANGE AD5933_RANGE_200MV_PP
-#define DEFAULT_PGA_GAIN AD5933_PGA_GAIN_X1
 
 /* Internal Helpers */
 
@@ -164,12 +158,6 @@ int ad5933_set_settling_cycles(const struct ims_device *dev, uint16_t cycles,
     return 0;
 }
 
-int ad5933_set_gain_factor(const struct ims_device *dev, double gain_factor) {
-    struct ad5933_data *data = dev->data;
-    data->gain_factor = gain_factor;
-    return 0;
-}
-
 int ad5933_set_pga_gain(const struct ims_device *dev,
                         enum ad5933_pga_gain gain) {
     ad5933_ctrl_reg1_t reg;
@@ -211,15 +199,6 @@ int ad5933_init(struct ims_device *dev, const struct ad5933_config *config,
     data->ctrl1.function_code = AD5933_FUNC_STANDBY;
     ERROR_CHECK(ad5933_set_ctrl_reg1(dev, data->ctrl1));
     ERROR_CHECK(ad5933_set_ctrl_reg2(dev, data->ctrl2));
-
-    /* Set defaults */
-    ERROR_CHECK(ad5933_set_start_freq(dev, DEFAULT_START_FREQ_HZ));
-    ERROR_CHECK(ad5933_set_inc_freq(dev, DEFAULT_INC_FREQ_HZ));
-    ERROR_CHECK(ad5933_set_num_inc(dev, DEFAULT_NUM_INC));
-    ERROR_CHECK(ad5933_set_settling_cycles(dev, DEFAULT_SETTLE_CYCLES,
-                                           AD5933_SETTLE_X1));
-    ERROR_CHECK(ad5933_set_voltage_range(dev, DEFAULT_VOLTAGE_RANGE));
-    ERROR_CHECK(ad5933_set_pga_gain(dev, DEFAULT_PGA_GAIN));
 
     return 0;
 }
