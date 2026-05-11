@@ -8,10 +8,12 @@ set(APP_SRCS
     "cmd/cmd_gpio_pin.c"
     "cmd/cmd_i2c_tool.c"
     "cmd/cmd_ad5933.c"
+    "cmd/cmd_ad7680.c"
     "cmd/cmd_board_utils.c"
     "services/ad5933/ad5933_service.c"
+    "services/ad7680/ad7680_service.c"
 )
-set(APP_INC_DIRS "include" "cmd" "services/ad5933" ".")
+set(APP_INC_DIRS "include" "cmd" "services/ad5933" "services/ad7680" ".")
 
 # Option to enable GPIO test (can also be passed via: idf.py build -DGPIO_TEST=ON)
 #set(GPIO_TEST ON) 

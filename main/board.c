@@ -13,6 +13,7 @@
 #include "ims-mcu-driver/gpio.h"
 #include "ims-mcu-driver/i2c.h"
 #include "ims-mcu-driver/sensor/ad5933.h"
+#include "ims-mcu-driver/sensor/ad7680.h"
 #include "ims-mcu-driver/spi.h"
 #include "ims-mcu-driver/util.h"
 
@@ -238,6 +239,20 @@ static struct {
     },
 };
 
+static struct {
+    struct ims_device dev;
+    struct ad7680_config config;
+    struct ad7680_data data;
+} ad7680_nodes[] = {
+    {
+        .dev = {.name = "ad7680"},
+        .config =
+            {
+                .spi_bus = &spi_configs[0].dev,
+            },
+    },
+};
+
 static esp_err_t board_gpio_init(void) {
     for (int i = 0; i < ARRAY_SIZE(gpio_configs); i++) {
         ESP_ERROR_CHECK(espidf_gpio_init(&gpio_configs[i].dev,
@@ -283,12 +298,22 @@ static esp_err_t board_ad5933_init(void) {
     return ESP_OK;
 }
 
+static esp_err_t board_ad7680_init(void) {
+    for (int i = 0; i < ARRAY_SIZE(ad7680_nodes); i++) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ad7680_init(&ad7680_nodes[i].dev,
+                                    &ad7680_nodes[i].config,
+                                    &ad7680_nodes[i].data));
+    }
+    return ESP_OK;
+}
+
 esp_err_t board_init(void) {
     ESP_ERROR_CHECK(board_gpio_init());
     ESP_ERROR_CHECK(board_gpio_pin_init());
     ESP_ERROR_CHECK(board_i2c_init());
     ESP_ERROR_CHECK(board_spi_init());
     ESP_ERROR_CHECK(board_ad5933_init());
+    ESP_ERROR_CHECK(board_ad7680_init());
     return ESP_OK;
 }
 
@@ -307,6 +332,7 @@ const struct ims_device *board_get_device(const char *name) {
     FIND_DEVICE(i2c_configs, name);
     FIND_DEVICE(spi_configs, name);
     FIND_DEVICE(ad5933_nodes, name);
+    FIND_DEVICE(ad7680_nodes, name);
 
 #undef FIND_DEVICE
     return NULL;

@@ -23,6 +23,7 @@
 #include "event.h"
 #include "service.h"
 #include "services/ad5933/ad5933_service.h"
+#include "services/ad7680/ad7680_service.h"
 
 #ifdef GPIO_TEST
 #include "test_gpio.h"
@@ -75,6 +76,7 @@ static void init_console(void) {
     register_i2c_tool_command();
     register_gpio_pin_command(40); // Max GPIOs
     register_ad5933_command();
+    register_ad7680_command();
     register_board_utils_command();
 
     /* Start console REPL */
@@ -101,6 +103,19 @@ void app_main(void) {
         ESP_LOGI(TAG, "AD5933 Service started");
     } else {
         ESP_LOGW(TAG, "AD5933 device not found in board config");
+    }
+
+    /* Start AD7680 Service */
+    static struct service ad7680_srv;
+    static struct ad7680_service_config ad7680_cfg;
+    ad7680_cfg.loop = service_event_loop;
+    ad7680_cfg.ad7680_dev = board_get_device("ad7680");
+
+    if (ad7680_cfg.ad7680_dev) {
+        ESP_ERROR_CHECK(ad7680_service_init(&ad7680_srv, &ad7680_cfg));
+        ESP_LOGI(TAG, "AD7680 Service started");
+    } else {
+        ESP_LOGW(TAG, "AD7680 device not found in board config");
     }
 
 #ifdef GPIO_TEST
