@@ -18,7 +18,7 @@ static int do_board_info(int argc, char **argv) {
     printf("\tMeasurement Enable: %s\n", info.measure_enabled ? "ON" : "OFF");
     
     if (info.subj_channel != -1) {
-        printf("\tSubject Channel:    %d\n", info.subj_channel);
+        printf("\tSubject Channel:    %d (index %d)\n", info.subj_channel + 1, info.subj_channel);
     } else {
         printf("\tSubject Channel:    Not set\n");
     }
@@ -52,8 +52,13 @@ static int do_board_set(int argc, char **argv) {
     PARSE_ARG(board_set_args);
 
     if (board_set_args.subj->count) {
-        board_set_subj_channel((enum board_subj_channel)board_set_args.subj->ival[0]);
-        printf("Subject channel set to %d\n", board_set_args.subj->ival[0]);
+        int val = board_set_args.subj->ival[0];
+        if (val < 1 || val > 16) {
+            printf("Error: Subject channel must be 1-16\n");
+            return 1;
+        }
+        board_set_subj_channel((enum board_subj_channel)(val - 1));
+        printf("Subject channel set to %d (index %d)\n", val, val - 1);
     }
 
     if (board_set_args.fb->count) {
@@ -85,9 +90,9 @@ esp_err_t register_board_utils_command(void) {
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&info_cmd));
 
-    board_set_args.subj = arg_int0("s", "subj", "<0-15>", "Set subject channel (10,12,14 are CAL)");
-    board_set_args.fb   = arg_int0("f", "fb", "<0-3>", "Set ZM feedback resistor index");
-    board_set_args.rm   = arg_int0("r", "rm", "<0-3>", "Set RM reference resistor index");
+    board_set_args.subj = arg_int0("s", "subj", "<1-16>", "Set subject channel (11: ZM:4.7k, RM:1k; 13: ZM:49.9k, RM:10k; 15: ZM:330k, RM:100k)");
+    board_set_args.fb   = arg_int0("f", "fb", "<0-3>", "Set ZM feedback (0:2k, 1:10k, 2:100k, 3:330k)");
+    board_set_args.rm   = arg_int0("r", "rm", "<0-3>", "Set RM range (0:330k, 1:33k, 2:3.3k, 3:330)");
     board_set_args.enable = arg_int0("e", "enable", "<0|1>", "Enable(1) or Disable(0) measurement");
     board_set_args.end  = arg_end(4);
 
