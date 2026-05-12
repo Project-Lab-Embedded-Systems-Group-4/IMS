@@ -1,53 +1,102 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 | Linux |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | --------- | ----- |
+# Impedance Measurement System (IMS)
 
-# Hello World Example
+An ESP32-based embedded system designed for high-precision impedance spectroscopy and resistance measurement. This project integrates the **AD5933** Impedance Analyzer and the **AD7680** 16-bit ADC into a service-oriented architecture using the ESP-IDF framework.
 
-Starts a FreeRTOS task to print "Hello World".
+## Key Features
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+- **Automated Frequency Sweeps**: Supports programmable frequency sweeps for impedance spectroscopy.
+- **Multi-Channel Multiplexing**: 
+    - 10 subject channels for measurements.
+    - 3 dedicated calibration channels.
+    - 4 selectable feedback resistors for the AD5933 transimpedance amplifier.
+- **Advanced Calibration**: Per-frequency gain factor calculation to ensure accuracy across the entire sweep range.
+- **Interactive CLI**: Comprehensive console interface for real-time control, hardware debugging, and data dumping.
 
-## How to use example
+## Hardware Architecture
 
-Follow detailed instructions provided specifically for this example.
+- **Microcontroller**: ESP32
+- **Impedance Analyzer**: Analog Devices AD5933 (I2C)
+- **ADC**: Analog Devices AD7680 (SPI)
+- **Analog Front-End**:
+    - **ZM_FB MUX**: Selects feedback resistors (2kΩ, 10kΩ, 100kΩ, 330kΩ).
+    - **SUBJ MUX**: Switches between 10 measurement channels and 3 calibration resistors (4.7kΩ, 49.9kΩ, 330kΩ).
+    - **RM_RANGE MUX**: Selects reference resistors for AD7680 resistance measurements.
 
-Select the instructions depending on Espressif chip installed on your development board:
+## Software Structure
 
-- [ESP32 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/stable/get-started/index.html)
-- [ESP32-S2 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
-
-
-## Example folder contents
-
-The project **hello_world** contains one source file in C language [hello_world_main.c](main/hello_world_main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt` files that provide set of directives and instructions describing the project's source files and targets (executable, library, or both).
-
-Below is short explanation of remaining files in the project folder.
-
+```text
+├── components/
+│   └── espidf-drivers/      # Low-level hardware drivers (I2C, SPI, GPIO)
+├── main/
+│   ├── services/            # Background services for AD5933 and AD7680
+│   ├── cmd/                 # Console command implementations
+│   ├── board.c              # Pin definitions and hardware initialization
+│   └── board_utils.c        # Multiplexer and resource locking logic
+└── CMakeLists.txt           # Build configuration
 ```
-├── CMakeLists.txt
-├── pytest_hello_world.py      Python script used for automated testing
-├── main
-│   ├── CMakeLists.txt
-│   └── hello_world_main.c
-└── README.md                  This is the file you are currently reading
-```
 
-For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
+## Getting Started
 
-## Troubleshooting
+### Prerequisites
+- ESP-IDF v6.0.1 or later. Follow the [ESP-IDF Get Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) for installation instructions.
+- A compatible ESP32 development board.
 
-* Program upload failure
+### Building and Flashing
 
-    * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
-    * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
+1. **Set up the environment**:
+   Ensure the ESP-IDF environment is initialized in your terminal (e.g., by running `. $HOME/export.sh`).
 
-## Technical support and feedback
+2. **Clone and Navigate**:
+   ```bash
+   git clone https://github.com/Project-Lab-Embedded-Systems-Group-4/IMS.git
+   cd IMS
+   ```
 
-Please use the following feedback channels:
+3. **Build and Flash**:
+   ```bash
+   idf.py build
+   idf.py flash monitor
+   ```
 
-* For technical queries, go to the [esp32.com](https://esp32.com/) forum
-* For a feature request or bug report, create a [GitHub issue](https://github.com/espressif/esp-idf/issues)
+## Console Commands
 
-We will get back to you as soon as possible.
+### AD5933 (Impedance Analyzer)
+The `ad5933` command suite controls the impedance analyzer:
+
+| Subcommand | Description |
+| :--- | :--- |
+| `info` | Displays current hardware status, temperature, and configuration. |
+| `cal -f <0-3>`| Starts an auto-calibration sweep using the specified feedback resistor index. |
+| `sweep` | Performs a full frequency sweep on the currently selected channel. |
+| `dump` | Displays the results (Real, Imag, Magnitude, Impedance) of the last sweep. |
+| `set` | Manually configure start frequency (`-s`), increments (`-i`), or PGA gain (`-p`). |
+| `reset` | Performs a hardware reset of the AD5933. |
+
+### AD7680 (Resistance ADC)
+The `ad7680` command suite handles high-precision ADC readings:
+
+| Subcommand | Description |
+| :--- | :--- |
+| `read [-i <n>]`| Requests an ADC reading with optional averaging over `n` iterations. |
+
+### Board Utilities
+Low-level control of multiplexers and measurement enable lines:
+
+| Command | Description |
+| :--- | :--- |
+| `board_info` | Shows current MUX selections (Subject, ZM Feedback, RM Range) and Enable status. |
+| `board_set` | Configures the board hardware: Subject channel (`-s`), ZM Feedback (`-f`), RM Range (`-r`), and Enable (`-e`). |
+
+### Example Usage
+1. **Calibrate and Sweep Impedance**:
+   ```bash
+   ims> ad5933 cal -f 1
+   ims> ad5933 sweep
+   ims> ad5933 dump
+   ```
+
+2. **Manual Hardware Configuration**:
+   ```bash
+   ims> board_set --subj 1 --fb 1 --enable 1
+   ims> ad7680 read -i 10
+   ```
