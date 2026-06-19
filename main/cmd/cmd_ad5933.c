@@ -135,6 +135,46 @@ static int do_ad5933_cal(int fb_index) {
 }
 
 static int do_ad5933_cmd(int argc, char **argv) {
+    bool continuous = false;
+    int interval_ms = 1000;
+    int average_times = 1;
+
+    if (argc >= 2 && strcmp(argv[1], "sweep") == 0) {
+        for (int i = 2; i < argc; ) {
+            if (strcmp(argv[i], "-c") == 0) {
+                continuous = true;
+                for (int j = i; j < argc - 1; j++) {
+                    argv[j] = argv[j + 1];
+                }
+                argc--;
+            } else if (strcmp(argv[i], "-i") == 0) {
+                if (i + 1 < argc) {
+                    interval_ms = atoi(argv[i+1]);
+                    for (int j = i; j < argc - 2; j++) {
+                        argv[j] = argv[j + 2];
+                    }
+                    argc -= 2;
+                } else {
+                    printf("Error: -i requires an integer value (interval in ms)\n");
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-a") == 0) {
+                if (i + 1 < argc) {
+                    average_times = atoi(argv[i+1]);
+                    for (int j = i; j < argc - 2; j++) {
+                        argv[j] = argv[j + 2];
+                    }
+                    argc -= 2;
+                } else {
+                    printf("Error: -a requires an integer value\n");
+                    return 1;
+                }
+            } else {
+                i++;
+            }
+        }
+    }
+
     PARSE_ARG(ad5933_args);
 
     const char *sub = ad5933_args.subcommand->sval[0];
@@ -144,19 +184,73 @@ static int do_ad5933_cmd(int argc, char **argv) {
         return 1;
     }
 
-    if (strcmp(sub, "info") == 0) {
+    if (strcmp(sub, "help") == 0) {
+        printf("Usage: ad5933 <subcommand> [options]\n\n");
+        printf("Subcommands:\n");
+        printf("  info                 Show current AD5933 status and configuration\n");
+        printf("  sweep [options]      Perform a frequency sweep\n");
+        printf("                       -c: continuously sweep in the background\n");
+        printf("                       -i <ms>: interval between continuous sweeps (default: 1000)\n");
+        printf("                       -a <count>: number of points to sweep and average (sets num increments)\n");
+        printf("  dump                 Display results of the last sweep\n");
+        printf("  cal [-f <0-3>]       Start calibration using feedback resistor index\n");
+        printf("                       -f: feedback index (0:2k, 1:10k, 2:100k, 3:330k)\n");
+        printf("  set [options]        Set configuration parameters\n");
+        printf("                       -s, --start=<Hz>: start frequency\n");
+        printf("                       -i, --inc=<Hz>: increment frequency\n");
+        printf("                       -n, --num=<n>: number of increments (0-511)\n");
+        printf("                       -p, --pga=<0|1>: PGA gain (0=x5, 1=x1)\n");
+        printf("                       -r, --range=<0-3>: excitation voltage range\n");
+        printf("  reset                Perform a hardware reset\n");
+        printf("  stop                 Stop the active continuous sweep\n");
+        return 0;
+    } else if (strcmp(sub, "info") == 0) {
         return do_ad5933_info(dev);
     } else if (strcmp(sub, "reset") == 0) {
         ad5933_reset(dev);
         printf("AD5933 reset performed.\n");
         return 0;
+    } else if (strcmp(sub, "stop") == 0) {
+        extern esp_event_loop_handle_t service_event_loop;
+        esp_err_t err = esp_event_post_to(
+            service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_STOP_SWEEP,
+            NULL, 0, portMAX_DELAY);
+        if (err == ESP_OK) {
+            printf("Stop request sent to sweep service...\n");
+        } else {
+            printf("Failed to send stop request: %s\n", esp_err_to_name(err));
+        }
+        return 0;
     } else if (strcmp(sub, "sweep") == 0) {
+        struct ad5933_sweep_params params = {
+            .continuous = continuous,
+            .interval_ms = interval_ms,
+            .average_times = average_times,
+        };
+
         extern esp_event_loop_handle_t service_event_loop;
         esp_err_t err = esp_event_post_to(
             service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_START_SWEEP,
-            NULL, 0, portMAX_DELAY);
+            &params, sizeof(params), portMAX_DELAY);
         if (err == ESP_OK) {
-            printf("Sweep started...\n");
+            if (continuous) {
+                printf("Continuous sweep started (interval: %d ms, avg: %d). Press ENTER to stop...\n", interval_ms, average_times);
+                while (1) {
+                    int c = getchar();
+                    if (c == '\n' || c == '\r') {
+                        break;
+                    }
+                    if (c == EOF) {
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                    }
+                }
+                // Send stop request
+                esp_event_post_to(
+                    service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_STOP_SWEEP,
+                    NULL, 0, portMAX_DELAY);
+            } else {
+                printf("Sweep started...\n");
+            }
         } else {
             printf("Failed to start sweep: %s\n", esp_err_to_name(err));
         }
@@ -195,14 +289,14 @@ static int do_ad5933_cmd(int argc, char **argv) {
         printf("Configuration updated.\n");
         return 0;
     } else {
-        printf("Unknown subcommand: %s. Use info, sweep, dump, or set.\n", sub);
+        printf("Unknown subcommand: %s. Use info, sweep, dump, cal, set, reset, stop, or help.\n", sub);
         return 1;
     }
 }
 
 esp_err_t register_ad5933_command(void) {
     ad5933_args.subcommand =
-        arg_str1(NULL, NULL, "<info|sweep|dump|cal|set|reset>", "Sub-command to execute");
+        arg_str1(NULL, NULL, "<info|sweep|dump|cal|set|reset|stop|help>", "Sub-command to execute");
     ad5933_args.start = arg_int0("s", "start", "<Hz>", "Start frequency in Hz");
     ad5933_args.inc =
         arg_int0("i", "inc", "<Hz>", "Increment frequency in Hz");
@@ -217,7 +311,7 @@ esp_err_t register_ad5933_command(void) {
 
     const esp_console_cmd_t cmd = {
         .command = "ad5933",
-        .help = "AD5933 control commands",
+        .help = "AD5933 control commands. Use 'ad5933 help' for detailed subcommand/sweep options.",
         .hint = NULL,
         .func = &do_ad5933_cmd,
         .argtable = &ad5933_args,

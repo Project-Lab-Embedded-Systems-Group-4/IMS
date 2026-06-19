@@ -116,6 +116,17 @@ enum ad5933_settle_mul {
     AD5933_SETTLE_X4 = 3,
 };
 
+struct ad5933_sweep_params {
+    bool continuous;
+    int interval_ms;
+    int average_times;
+};
+
+struct ad5933_data_ready_params {
+    bool is_cal;
+    bool is_continuous;
+};
+
 struct ad5933_sample_data {
     int16_t real;
     int16_t imag;

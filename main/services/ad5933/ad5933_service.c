@@ -60,6 +60,13 @@ struct ad5933_service_data {
     uint8_t cal_fb_index;
     enum board_subj_channel cal_channel;
     double cal_resistor;
+    bool continuous;
+    int interval_ms;
+    int average_times;
+    uint16_t orig_num_inc;
+    uint32_t orig_inc_freq;
+    bool has_saved_orig;
+    bool stop_requested;
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -73,6 +80,17 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
         switch (event_id) {
         case IMS_EVENT_AD5933_START_SWEEP:
             data->is_calibrating = false;
+            data->stop_requested = false;
+            if (event_data != NULL) {
+                struct ad5933_sweep_params *params = (struct ad5933_sweep_params *)event_data;
+                data->continuous = params->continuous;
+                data->interval_ms = params->interval_ms;
+                data->average_times = params->average_times;
+            } else {
+                data->continuous = false;
+                data->interval_ms = 1000;
+                data->average_times = 1;
+            }
             xSemaphoreGive(data->start_sem);
             break;
         case IMS_EVENT_AD5933_START_CAL: {
@@ -101,13 +119,23 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
             }
 
             data->is_calibrating = true;
+            data->continuous = false;
+            data->interval_ms = 1000;
+            data->average_times = 1;
             xSemaphoreGive(data->start_sem);
             break;
         }
+        case IMS_EVENT_AD5933_STOP_SWEEP:
+            data->stop_requested = true;
+            printf("Continuous sweep stopping gracefully...\n");
+            break;
         case IMS_EVENT_AD5933_DATA_READY: {
             bool was_cal = false;
+            bool was_continuous = false;
             if (event_data != NULL) {
-                was_cal = *(bool *)event_data;
+                struct ad5933_data_ready_params *params = (struct ad5933_data_ready_params *)event_data;
+                was_cal = params->is_cal;
+                was_continuous = params->is_continuous;
             }
 
             if (was_cal) {
@@ -130,21 +158,44 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 }
             }
 
-            printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
-                   "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
-            printf("------|------------|------------|--------------|--------------|-----------------\n");
-            for (int i = 0; i < data->sample_count; i++) {
-                double magnitude =
-                    sqrt((double)data->samples[i].real * data->samples[i].real +
-                         (double)data->samples[i].imag * data->samples[i].imag);
-                double gf = data->gain_factors[i];
+            if (was_continuous) {
+                double sum_real = 0;
+                double sum_imag = 0;
+                for (int i = 0; i < data->sample_count; i++) {
+                    sum_real += data->samples[i].real;
+                    sum_imag += data->samples[i].imag;
+                }
+                double avg_real = data->sample_count > 0 ? (sum_real / data->sample_count) : 0;
+                double avg_imag = data->sample_count > 0 ? (sum_imag / data->sample_count) : 0;
+                double magnitude = sqrt(avg_real * avg_real + avg_imag * avg_imag);
+
+                double gf = data->gain_factors[0];
                 double impedance = 0;
                 if (gf != 0 && magnitude != 0) {
                     impedance = 1.0 / (gf * magnitude);
                 }
-                printf("%-5d | %-10d | %-10d | %-12.2f | %-12.2e | %-15.2f\n", i,
-                       data->samples[i].real, data->samples[i].imag, magnitude,
-                       gf, impedance);
+
+                static uint32_t sweep_num = 0;
+                sweep_num++;
+                printf("#%" PRIu32 " | Real: %.2f | Imag: %.2f | Mag: %.2f | Imp: %.2f Ohm\n",
+                       sweep_num, avg_real, avg_imag, magnitude, impedance);
+            } else {
+                printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
+                       "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
+                printf("------|------------|------------|--------------|--------------|-----------------\n");
+                for (int i = 0; i < data->sample_count; i++) {
+                    double magnitude =
+                        sqrt((double)data->samples[i].real * data->samples[i].real +
+                             (double)data->samples[i].imag * data->samples[i].imag);
+                    double gf = data->gain_factors[i];
+                    double impedance = 0;
+                    if (gf != 0 && magnitude != 0) {
+                        impedance = 1.0 / (gf * magnitude);
+                    }
+                    printf("%-5d | %-10d | %-10d | %-12.2f | %-12.2e | %-15.2f\n", i,
+                           data->samples[i].real, data->samples[i].imag, magnitude,
+                           gf, impedance);
+                }
             }
             break;
         }
@@ -160,7 +211,6 @@ static void ad5933_service_task(void *arg) {
         (struct ad5933_service_config *)s->config;
     struct ad5933_service_data *data = (struct ad5933_service_data *)s->data;
     const struct ims_device *ad_dev = cfg->ad5933_dev;
-    bool is_cal = false;
 
     ESP_LOGI(TAG, "AD5933 Service Task Started");
 
@@ -207,6 +257,14 @@ static void ad5933_service_task(void *arg) {
             break;
 
         case AD5933_STATE_STANDBY:
+            if (data->continuous && data->average_times > 1 && !data->has_saved_orig) {
+                ad5933_get_num_inc(ad_dev, &data->orig_num_inc);
+                ad5933_get_inc_freq(ad_dev, &data->orig_inc_freq);
+                data->has_saved_orig = true;
+
+                ad5933_set_num_inc(ad_dev, data->average_times);
+                ad5933_set_inc_freq(ad_dev, 0);
+            }
 
             ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
             ctrl1.function_code = AD5933_FUNC_STANDBY;
@@ -268,6 +326,11 @@ static void ad5933_service_task(void *arg) {
             if (timeout) {
                 board_measure_enable(false);
                 board_utils_unlock();
+                if (data->has_saved_orig) {
+                    ad5933_set_num_inc(ad_dev, data->orig_num_inc);
+                    ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
+                    data->has_saved_orig = false;
+                }
                 data->now_state = AD5933_STATE_IDLE;
                 break;
             }
@@ -283,7 +346,9 @@ static void ad5933_service_task(void *arg) {
                 xSemaphoreGive(data->data_mutex);
             }
 
-            if (status.sweep_complete) {
+            bool sweep_done = status.sweep_complete;
+
+            if (sweep_done) {
                 /* Finish: Power down and release resources */
                 ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
                 ctrl1.function_code = AD5933_FUNC_POWER_DOWN;
@@ -292,13 +357,32 @@ static void ad5933_service_task(void *arg) {
                 board_measure_enable(false);
                 board_utils_unlock();
 
-                is_cal = data->is_calibrating;
+                struct ad5933_data_ready_params ready_params = {
+                    .is_cal = data->is_calibrating,
+                    .is_continuous = data->continuous,
+                };
                 esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
-                                  IMS_EVENT_AD5933_DATA_READY, &is_cal,
-                                  sizeof(is_cal), portMAX_DELAY);
+                                  IMS_EVENT_AD5933_DATA_READY, &ready_params,
+                                  sizeof(ready_params), portMAX_DELAY);
 
-                data->now_state = AD5933_STATE_IDLE;
-                data->is_calibrating = false;
+                if (data->stop_requested) {
+                    data->continuous = false;
+                    data->stop_requested = false;
+                }
+
+                if (data->continuous) {
+                    vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
+                    data->now_state = AD5933_STATE_IDLE;
+                    xSemaphoreGive(data->start_sem);
+                } else {
+                    if (data->has_saved_orig) {
+                        ad5933_set_num_inc(ad_dev, data->orig_num_inc);
+                        ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
+                        data->has_saved_orig = false;
+                    }
+                    data->now_state = AD5933_STATE_IDLE;
+                    data->is_calibrating = false;
+                }
             } else {
                 /* Increment frequency for the next point */
                 ad5933_get_ctrl_reg1(ad_dev, &ctrl1);

@@ -8,7 +8,7 @@
 /**
  * @brief Impedance Measurement (AD5933) Constants
  */
-#define ZM_FB_RES_VALUES   { 0, 12000, 102000, 332000 }
+#define ZM_FB_RES_VALUES   { 2000, 10000, 100000, 330000 }
 #define ZM_CAL_RES_VALUES  { 4700, 49900, 330000 }
 
 /**
