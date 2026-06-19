@@ -10,6 +10,7 @@
 #include "cmd.h"
 #include "event.h"
 #include "services/ad5933/ad5933_service.h"
+#include "nvs.h"
 
 static struct {
     struct arg_str *subcommand;
@@ -264,16 +265,42 @@ static int do_ad5933_cmd(int argc, char **argv) {
     } else if (strcmp(sub, "dump") == 0) {
         return do_ad5933_dump();
     } else if (strcmp(sub, "set") == 0) {
-        if (ad5933_args.start->count)
-            ad5933_set_start_freq(dev, ad5933_args.start->ival[0]);
-        if (ad5933_args.inc->count)
-            ad5933_set_inc_freq(dev, ad5933_args.inc->ival[0]);
-        if (ad5933_args.num->count)
-            ad5933_set_num_inc(dev, (uint16_t)ad5933_args.num->ival[0]);
+        nvs_handle_t my_handle;
+        bool has_changes = false;
+        esp_err_t nvs_err = nvs_open("ad5933", NVS_READWRITE, &my_handle);
+
+        if (ad5933_args.start->count) {
+            uint32_t val = ad5933_args.start->ival[0];
+            ad5933_set_start_freq(dev, val);
+            if (nvs_err == ESP_OK) {
+                nvs_set_u32(my_handle, "start_freq", val);
+                has_changes = true;
+            }
+        }
+        if (ad5933_args.inc->count) {
+            uint32_t val = ad5933_args.inc->ival[0];
+            ad5933_set_inc_freq(dev, val);
+            if (nvs_err == ESP_OK) {
+                nvs_set_u32(my_handle, "inc_freq", val);
+                has_changes = true;
+            }
+        }
+        if (ad5933_args.num->count) {
+            uint16_t val = (uint16_t)ad5933_args.num->ival[0];
+            ad5933_set_num_inc(dev, val);
+            if (nvs_err == ESP_OK) {
+                nvs_set_u16(my_handle, "num_inc", val);
+                has_changes = true;
+            }
+        }
         if (ad5933_args.pga->count) {
             int pga = ad5933_args.pga->ival[0];
             if (pga == 0 || pga == 1) {
                 ad5933_set_pga_gain(dev, (enum ad5933_pga_gain)pga);
+                if (nvs_err == ESP_OK) {
+                    nvs_set_u8(my_handle, "pga_gain", (uint8_t)pga);
+                    has_changes = true;
+                }
             } else {
                 printf("Error: PGA must be 0 (x5) or 1 (x1)\n");
             }
@@ -282,9 +309,19 @@ static int do_ad5933_cmd(int argc, char **argv) {
             int r = ad5933_args.range->ival[0];
             if (r >= 0 && r <= 3) {
                 ad5933_set_voltage_range(dev, (enum ad5933_voltage_range)r);
+                if (nvs_err == ESP_OK) {
+                    nvs_set_u8(my_handle, "voltage_range", (uint8_t)r);
+                    has_changes = true;
+                }
             } else {
                 printf("Error: Range must be 0..3\n");
             }
+        }
+        if (nvs_err == ESP_OK) {
+            if (has_changes) {
+                nvs_commit(my_handle);
+            }
+            nvs_close(my_handle);
         }
         printf("Configuration updated.\n");
         return 0;

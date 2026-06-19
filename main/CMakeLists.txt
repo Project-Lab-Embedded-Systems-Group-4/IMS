@@ -33,6 +33,7 @@ set(priv_requires
     console 
     esp_partition 
     esp_timer
+    nvs_flash
 )
 idf_component_register(
     SRCS "${APP_SRCS}"

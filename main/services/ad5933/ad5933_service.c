@@ -13,6 +13,8 @@
 #include "ims-mcu-driver/sensor/ad5933.h"
 #include "service.h"
 #include "services/ad5933/ad5933_service.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 #define TAG "ad5933_srv"
 
@@ -430,6 +432,58 @@ static const struct service_api ad5933_api = {
     .run = ad5933_run,
 };
 
+static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev) {
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("ad5933", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle! Using hardcoded defaults.", esp_err_to_name(err));
+        ad5933_set_start_freq(ad_dev, AD5933_DEFAULT_START_FREQ_HZ);
+        ad5933_set_inc_freq(ad_dev, AD5933_DEFAULT_INC_FREQ_HZ);
+        ad5933_set_num_inc(ad_dev, AD5933_DEFAULT_NUM_INC);
+        ad5933_set_voltage_range(ad_dev, AD5933_DEFAULT_VOLTAGE_RANGE);
+        ad5933_set_pga_gain(ad_dev, AD5933_DEFAULT_PGA_GAIN);
+        return;
+    }
+
+    uint32_t start_freq = AD5933_DEFAULT_START_FREQ_HZ;
+    err = nvs_get_u32(my_handle, "start_freq", &start_freq);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_u32(my_handle, "start_freq", start_freq);
+    }
+    ad5933_set_start_freq(ad_dev, start_freq);
+
+    uint32_t inc_freq = AD5933_DEFAULT_INC_FREQ_HZ;
+    err = nvs_get_u32(my_handle, "inc_freq", &inc_freq);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_u32(my_handle, "inc_freq", inc_freq);
+    }
+    ad5933_set_inc_freq(ad_dev, inc_freq);
+
+    uint16_t num_inc = AD5933_DEFAULT_NUM_INC;
+    err = nvs_get_u16(my_handle, "num_inc", &num_inc);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_u16(my_handle, "num_inc", num_inc);
+    }
+    ad5933_set_num_inc(ad_dev, num_inc);
+
+    uint8_t voltage_range = AD5933_DEFAULT_VOLTAGE_RANGE;
+    err = nvs_get_u8(my_handle, "voltage_range", &voltage_range);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_u8(my_handle, "voltage_range", voltage_range);
+    }
+    ad5933_set_voltage_range(ad_dev, (enum ad5933_voltage_range)voltage_range);
+
+    uint8_t pga_gain = AD5933_DEFAULT_PGA_GAIN;
+    err = nvs_get_u8(my_handle, "pga_gain", &pga_gain);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_set_u8(my_handle, "pga_gain", pga_gain);
+    }
+    ad5933_set_pga_gain(ad_dev, (enum ad5933_pga_gain)pga_gain);
+
+    nvs_commit(my_handle);
+    nvs_close(my_handle);
+}
+
 esp_err_t ad5933_service_init(struct service *s,
                               struct ad5933_service_config *config) {
     struct ad5933_service_data *data =
@@ -455,12 +509,8 @@ esp_err_t ad5933_service_init(struct service *s,
 
     /* Driver Initialization with defaults */
     const struct ims_device *ad_dev = config->ad5933_dev;
-    ad5933_set_start_freq(ad_dev, AD5933_DEFAULT_START_FREQ_HZ);
-    ad5933_set_inc_freq(ad_dev, AD5933_DEFAULT_INC_FREQ_HZ);
-    ad5933_set_num_inc(ad_dev, AD5933_DEFAULT_NUM_INC);
+    ad5933_load_or_init_nvs_settings(ad_dev);
     ad5933_set_settling_cycles(ad_dev, AD5933_DEFAULT_SETTLE_CYCLES, AD5933_SETTLE_X1);
-    ad5933_set_voltage_range(ad_dev, AD5933_DEFAULT_VOLTAGE_RANGE);
-    ad5933_set_pga_gain(ad_dev, AD5933_DEFAULT_PGA_GAIN);
 
     g_ad5933_srv = s;
 
