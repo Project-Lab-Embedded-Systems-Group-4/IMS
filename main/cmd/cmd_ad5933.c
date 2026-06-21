@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -142,6 +143,23 @@ static int do_ad5933_info(int argc, char **argv) {
     }
     printf("\tVoltage:     %s\n", range_str);
 
+    uint8_t fb_idx = 0;
+    double cal_res = 0;
+    double gf_first = 0;
+    esp_err_t cal_info_err = ad5933_service_get_calibration_info(&fb_idx, &cal_res, &gf_first);
+    if (cal_info_err == ESP_OK) {
+        uint32_t zm_fb[] = ZM_FB_RES_VALUES;
+        uint32_t ref_res = 0;
+        if (fb_idx < sizeof(zm_fb)/sizeof(zm_fb[0])) {
+            ref_res = zm_fb[fb_idx];
+        }
+        printf("\tRef Resistor:  %" PRIu32 " Ohm (FB Index: %u)\n", ref_res, fb_idx);
+        printf("\tCal Resistor:  %.2f Ohm\n", cal_res);
+        printf("\tGain Factor:   %.6e\n", gf_first);
+    } else {
+        printf("\tCalibration Info: Not available\n");
+    }
+
     printf("\nChannel Offsets & Calibration Frequencies:\n");
     double offsets[10] = {0};
     uint32_t freqs[10] = {0};
@@ -277,22 +295,28 @@ static int do_ad5933_sweep(int argc, char **argv) {
     const char *sweep_channel = sweep_args.channel->count > 0 ? sweep_args.channel->sval[0] : "";
 
     bool override_ch = false;
-    int start_ch = -1;
-    int end_ch = -1;
+    bool channels[10] = {false};
     if (strlen(sweep_channel) > 0) {
         override_ch = true;
         if (strcmp(sweep_channel, "all") == 0) {
-            start_ch = 0;
-            end_ch = 9;
-        } else {
-            int val = atoi(sweep_channel);
-            if (val >= 1 && val <= 10) {
-                start_ch = val - 1;
-                end_ch = val - 1;
-            } else {
-                printf("Error: channel must be 1-10 or 'all'\n");
-                return 1;
+            for (int i = 0; i < 10; i++) {
+                channels[i] = true;
             }
+        } else {
+            char *temp = strdup(sweep_channel);
+            char *token = strtok(temp, ",");
+            while (token != NULL) {
+                int val = atoi(token);
+                if (val >= 1 && val <= 10) {
+                    channels[val - 1] = true;
+                } else {
+                    printf("Error: channel must be 1-10 or 'all'\n");
+                    free(temp);
+                    return 1;
+                }
+                token = strtok(NULL, ",");
+            }
+            free(temp);
         }
     }
 
@@ -301,9 +325,8 @@ static int do_ad5933_sweep(int argc, char **argv) {
         .interval_ms = interval_ms,
         .average_times = average_times,
         .override_channel = override_ch,
-        .start_channel = start_ch,
-        .end_channel = end_ch,
     };
+    memcpy(params.channels, channels, sizeof(params.channels));
 
     extern esp_event_loop_handle_t service_event_loop;
     esp_err_t err = esp_event_post_to(
@@ -526,8 +549,8 @@ static int do_ad5933_prep(int argc, char **argv) {
     
     // 3. Subject channel
     int subject_channel = 1;
-    bool all_channels = false;
-    printf("Enter subject channel (1-10 or 'all') [default: 1]: ");
+    bool all_channels = true;
+    printf("Enter subject channel (1-10 or 'all') [default: all]: ");
     fflush(stdout);
     get_line_interactive(input_buf, sizeof(input_buf));
     trim_trailing(input_buf);
@@ -538,8 +561,9 @@ static int do_ad5933_prep(int argc, char **argv) {
             int val = atoi(input_buf);
             if (val >= 1 && val <= 10) {
                 subject_channel = val;
+                all_channels = false;
             } else {
-                printf("Invalid channel, using default: %d\n", subject_channel);
+                printf("Invalid channel, using default: all\n");
             }
         }
     }
@@ -654,14 +678,81 @@ static int do_ad5933_prep(int argc, char **argv) {
 }
 
 static int do_ad5933_cmd(int argc, char **argv) {
-    return esp_console_dispatch_subcommand("ad5933", argc, argv);
+    static char ch_buf[256];
+    int new_argc = 0;
+    char *new_argv[32];
+    if (argc > 32) argc = 32;
+
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--ch") == 0 && i + 1 < argc) {
+            new_argv[new_argc++] = argv[i];
+            i++;
+            ch_buf[0] = '\0';
+            size_t ch_len = 0;
+            
+            if (i < argc) {
+                char temp[32];
+                strncpy(temp, argv[i], sizeof(temp) - 1);
+                temp[sizeof(temp) - 1] = '\0';
+                size_t l = strlen(temp);
+                if (l > 0 && temp[l - 1] == ',') {
+                    temp[l - 1] = '\0';
+                }
+                strcpy(ch_buf, temp);
+                ch_len = strlen(ch_buf);
+            }
+            
+            while (i + 1 < argc) {
+                char *next = argv[i + 1];
+                if (next[0] == '-') {
+                    break;
+                }
+                
+                char temp[32];
+                strncpy(temp, next, sizeof(temp) - 1);
+                temp[sizeof(temp) - 1] = '\0';
+                size_t l = strlen(temp);
+                if (l > 0 && temp[l - 1] == ',') {
+                    temp[l - 1] = '\0';
+                }
+                
+                bool is_valid_ch = false;
+                if (strcmp(temp, "all") == 0) {
+                    is_valid_ch = true;
+                } else {
+                    char *endptr;
+                    long val = strtol(temp, &endptr, 10);
+                    if (endptr != temp && *endptr == '\0' && val >= 1 && val <= 10) {
+                        is_valid_ch = true;
+                    }
+                }
+                
+                if (!is_valid_ch) {
+                    break;
+                }
+                
+                i++;
+                if (ch_len + 1 + strlen(temp) < sizeof(ch_buf) - 1) {
+                    ch_buf[ch_len++] = ',';
+                    strcpy(ch_buf + ch_len, temp);
+                    ch_len += strlen(temp);
+                }
+            }
+            new_argv[new_argc++] = ch_buf;
+        } else {
+            new_argv[new_argc++] = argv[i];
+        }
+    }
+    new_argv[new_argc] = NULL;
+
+    return esp_console_dispatch_subcommand("ad5933", new_argc, new_argv);
 }
 
 esp_err_t register_ad5933_command(void) {
     sweep_args.continuous = arg_lit0("c", NULL, "Continuously sweep in the background");
     sweep_args.interval = arg_int0("i", "interval", "<ms>", "Interval between continuous sweeps (default: 1000)");
     sweep_args.average = arg_int0("a", "average", "<count>", "Number of points to sweep and average");
-    sweep_args.channel = arg_str0(NULL, "ch", "<1-10|all>", "Subject channel or all channels to sweep");
+    sweep_args.channel = arg_str0(NULL, "ch", "<1-10|all>", "Subject channel or all channels to sweep (when select more than one channel it should be --ch 1, 2, ...)");
     sweep_args.end = arg_end(5);
 
     cal_args.fb = arg_int0("f", "fb", "<0-3>", "ZM Feedback index (0:2k, 1:10k, 2:100k, 3:330k)");

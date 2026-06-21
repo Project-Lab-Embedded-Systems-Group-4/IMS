@@ -97,12 +97,29 @@ struct ad5933_service_data {
     double offsets[10];
     uint32_t offset_freqs[10];
     bool override_channel;
-    int start_channel;
-    int end_channel;
+    bool channels[10];
     int current_sweep_channel;
+    double continuous_impedances[10];
+    bool continuous_channel_measured[10];
+    uint32_t continuous_sweep_index;
+    bool continuous_header_printed;
 };
 
 static struct service *g_ad5933_srv = NULL;
+
+static int get_first_channel(const bool channels[10]) {
+    for (int i = 0; i < 10; i++) {
+        if (channels[i]) return i;
+    }
+    return -1;
+}
+
+static int get_next_channel(const bool channels[10], int current_ch) {
+    for (int i = current_ch + 1; i < 10; i++) {
+        if (channels[i]) return i;
+    }
+    return -1;
+}
 
 static void ad5933_event_handler(void *arg, esp_event_base_t base,
                                  int32_t event_id, void *event_data) {
@@ -114,16 +131,19 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
         case IMS_EVENT_AD5933_START_SWEEP:
             data->is_calibrating = false;
             data->stop_requested = false;
+            data->continuous_sweep_index = 0;
+            data->continuous_header_printed = false;
+            memset(data->continuous_channel_measured, 0, sizeof(data->continuous_channel_measured));
+            memset(data->continuous_impedances, 0, sizeof(data->continuous_impedances));
             if (event_data != NULL) {
                 struct ad5933_sweep_params *params = (struct ad5933_sweep_params *)event_data;
                 data->continuous = params->continuous;
                 data->interval_ms = params->interval_ms;
                 data->average_times = params->average_times;
                 data->override_channel = params->override_channel;
-                data->start_channel = params->start_channel;
-                data->end_channel = params->end_channel;
+                memcpy(data->channels, params->channels, sizeof(data->channels));
                 if (params->override_channel) {
-                    data->current_sweep_channel = params->start_channel;
+                    data->current_sweep_channel = get_first_channel(data->channels);
                 } else {
                     data->current_sweep_channel = -1;
                 }
@@ -132,8 +152,7 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 data->interval_ms = 1000;
                 data->average_times = 1;
                 data->override_channel = false;
-                data->start_channel = -1;
-                data->end_channel = -1;
+                memset(data->channels, 0, sizeof(data->channels));
                 data->current_sweep_channel = -1;
             }
             xSemaphoreGive(data->start_sem);
@@ -168,8 +187,7 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
             data->interval_ms = 1000;
             data->average_times = 1;
             data->override_channel = false;
-            data->start_channel = -1;
-            data->end_channel = -1;
+            memset(data->channels, 0, sizeof(data->channels));
             data->current_sweep_channel = -1;
             xSemaphoreGive(data->start_sem);
             break;
@@ -248,10 +266,66 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     }
                 }
 
-                static uint32_t sweep_num = 0;
-                sweep_num++;
-                printf("#%" PRIu32 " | Ch %2d | Imp: %.2f Ohm\n",
-                       sweep_num, board_info.subj_channel + 1, impedance);
+                bool show_ch[10] = {false};
+                if (data->override_channel) {
+                    memcpy(show_ch, data->channels, sizeof(show_ch));
+                } else {
+                    if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
+                        show_ch[board_info.subj_channel] = true;
+                    }
+                }
+
+                if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
+                    data->continuous_impedances[board_info.subj_channel] = impedance;
+                    data->continuous_channel_measured[board_info.subj_channel] = true;
+                }
+
+                if (!data->continuous_header_printed) {
+                    printf("\r\n%-5s", "Index");
+                    for (int ch = 0; ch < 10; ch++) {
+                        if (show_ch[ch]) {
+                            char ch_name[16];
+                            snprintf(ch_name, sizeof(ch_name), "ch %d", ch + 1);
+                            printf(" | %-11s", ch_name);
+                        }
+                    }
+                    printf("\r\n------");
+                    for (int ch = 0; ch < 10; ch++) {
+                        if (show_ch[ch]) {
+                            printf("|-------------");
+                        }
+                    }
+                    printf("\r\n");
+                    data->continuous_header_printed = true;
+                }
+
+                bool all_measured = true;
+                for (int ch = 0; ch < 10; ch++) {
+                    if (show_ch[ch]) {
+                        if (!data->continuous_channel_measured[ch]) {
+                            all_measured = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (all_measured) {
+                    data->continuous_sweep_index++;
+                    printf("%-5" PRIu32, data->continuous_sweep_index);
+                    for (int ch = 0; ch < 10; ch++) {
+                        if (show_ch[ch]) {
+                            double val = data->continuous_impedances[ch];
+                            if (isinf(val)) {
+                                printf(" | %-11s", "inf");
+                            } else {
+                                printf(" | %-11.3f", val);
+                            }
+                        }
+                    }
+                    printf("\r\n");
+                    fflush(stdout);
+                    memset(data->continuous_channel_measured, 0, sizeof(data->continuous_channel_measured));
+                }
             } else {
                 printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
                        "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
@@ -450,19 +524,26 @@ static void ad5933_service_task(void *arg) {
 
                 if (data->continuous) {
                     if (data->override_channel && data->current_sweep_channel >= 0) {
-                        data->current_sweep_channel++;
-                        if (data->current_sweep_channel > data->end_channel) {
-                            data->current_sweep_channel = data->start_channel;
+                        int next_ch = get_next_channel(data->channels, data->current_sweep_channel);
+                        if (next_ch == -1) {
+                            next_ch = get_first_channel(data->channels);
                         }
+                        data->current_sweep_channel = next_ch;
                     }
                     vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
                     data->now_state = AD5933_STATE_IDLE;
                     xSemaphoreGive(data->start_sem);
                 } else {
-                    if (data->override_channel && data->current_sweep_channel >= 0 && data->current_sweep_channel < data->end_channel) {
-                        data->current_sweep_channel++;
-                        data->now_state = AD5933_STATE_IDLE;
-                        xSemaphoreGive(data->start_sem);
+                    if (data->override_channel && data->current_sweep_channel >= 0) {
+                        int next_ch = get_next_channel(data->channels, data->current_sweep_channel);
+                        if (next_ch != -1) {
+                            data->current_sweep_channel = next_ch;
+                            data->now_state = AD5933_STATE_IDLE;
+                            xSemaphoreGive(data->start_sem);
+                        } else {
+                            data->now_state = AD5933_STATE_IDLE;
+                            data->is_calibrating = false;
+                        }
                     } else {
                         data->now_state = AD5933_STATE_IDLE;
                         data->is_calibrating = false;
@@ -694,5 +775,22 @@ esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples,
         *out_gain_factors = data->gain_factors;
     }
     *out_count = data->sample_count;
+    return ESP_OK;
+}
+
+esp_err_t ad5933_service_get_calibration_info(uint8_t *out_fb_index, double *out_cal_resistor, double *out_first_gain_factor) {
+    if (g_ad5933_srv == NULL)
+        return ESP_ERR_INVALID_STATE;
+    struct ad5933_service_data *data = (struct ad5933_service_data *)g_ad5933_srv->data;
+    
+    if (out_fb_index) {
+        *out_fb_index = data->cal_fb_index;
+    }
+    if (out_cal_resistor) {
+        *out_cal_resistor = data->cal_resistor;
+    }
+    if (out_first_gain_factor) {
+        *out_first_gain_factor = data->gain_factors[0];
+    }
     return ESP_OK;
 }
