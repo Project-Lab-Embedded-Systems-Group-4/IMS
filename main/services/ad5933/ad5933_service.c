@@ -32,6 +32,30 @@
 #define AD5933_CALI_RESISTOR 49900.0
 #define AD5933_CALI_FB_INDEX 1
 
+#define AD5933_DEFAULT_CH1_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH2_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH3_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH4_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH5_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH6_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH7_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH8_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH9_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH10_OFFSET_OHM 0.0
+
+static const double ad5933_default_offsets[10] = {
+    AD5933_DEFAULT_CH1_OFFSET_OHM,
+    AD5933_DEFAULT_CH2_OFFSET_OHM,
+    AD5933_DEFAULT_CH3_OFFSET_OHM,
+    AD5933_DEFAULT_CH4_OFFSET_OHM,
+    AD5933_DEFAULT_CH5_OFFSET_OHM,
+    AD5933_DEFAULT_CH6_OFFSET_OHM,
+    AD5933_DEFAULT_CH7_OFFSET_OHM,
+    AD5933_DEFAULT_CH8_OFFSET_OHM,
+    AD5933_DEFAULT_CH9_OFFSET_OHM,
+    AD5933_DEFAULT_CH10_OFFSET_OHM
+};
+
 enum ad5933_service_state {
     AD5933_STATE_IDLE = 0,
     AD5933_STATE_STANDBY,         /* Step 1 / Wait state */
@@ -69,6 +93,7 @@ struct ad5933_service_data {
     uint32_t orig_inc_freq;
     bool has_saved_orig;
     bool stop_requested;
+    double offsets[10];
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -160,6 +185,13 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 }
             }
 
+            struct board_utils_info board_info;
+            board_utils_get_info(&board_info);
+            double offset = 0;
+            if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
+                offset = data->offsets[board_info.subj_channel];
+            }
+
             if (was_continuous) {
                 double sum_real = 0;
                 double sum_imag = 0;
@@ -175,6 +207,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 double impedance = 0;
                 if (gf != 0 && magnitude != 0) {
                     impedance = 1.0 / (gf * magnitude);
+                    impedance -= offset;
+                    if (impedance < 0) impedance = 0;
                 }
 
                 static uint32_t sweep_num = 0;
@@ -193,6 +227,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     double impedance = 0;
                     if (gf != 0 && magnitude != 0) {
                         impedance = 1.0 / (gf * magnitude);
+                        impedance -= offset;
+                        if (impedance < 0) impedance = 0;
                     }
                     printf("%-5d | %-10d | %-10d | %-12.2f | %-12.2e | %-15.2f\n", i,
                            data->samples[i].real, data->samples[i].imag, magnitude,
@@ -432,7 +468,7 @@ static const struct service_api ad5933_api = {
     .run = ad5933_run,
 };
 
-static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev) {
+static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev, struct ad5933_service_data *data) {
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open("ad5933", NVS_READWRITE, &my_handle);
     if (err != ESP_OK) {
@@ -442,6 +478,7 @@ static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev) {
         ad5933_set_num_inc(ad_dev, AD5933_DEFAULT_NUM_INC);
         ad5933_set_voltage_range(ad_dev, AD5933_DEFAULT_VOLTAGE_RANGE);
         ad5933_set_pga_gain(ad_dev, AD5933_DEFAULT_PGA_GAIN);
+        memcpy(data->offsets, ad5933_default_offsets, sizeof(ad5933_default_offsets));
         return;
     }
 
@@ -480,8 +517,60 @@ static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev) {
     }
     ad5933_set_pga_gain(ad_dev, (enum ad5933_pga_gain)pga_gain);
 
+    // Load offsets
+    for (uint8_t i = 0; i < 10; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "offset_%u", i);
+        uint64_t val_u64;
+        err = nvs_get_u64(my_handle, key, &val_u64);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            double default_offset = ad5933_default_offsets[i];
+            memcpy(&val_u64, &default_offset, sizeof(double));
+            nvs_set_u64(my_handle, key, val_u64);
+            data->offsets[i] = default_offset;
+        } else {
+            double offset_val;
+            memcpy(&offset_val, &val_u64, sizeof(double));
+            data->offsets[i] = offset_val;
+        }
+    }
+
     nvs_commit(my_handle);
     nvs_close(my_handle);
+}
+
+esp_err_t ad5933_service_get_offsets(double *out_offsets, uint8_t count) {
+    if (g_ad5933_srv == NULL) return ESP_ERR_INVALID_STATE;
+    struct ad5933_service_data *data = (struct ad5933_service_data *)g_ad5933_srv->data;
+    if (count > 10) count = 10;
+    xSemaphoreTake(data->data_mutex, portMAX_DELAY);
+    memcpy(out_offsets, data->offsets, count * sizeof(double));
+    xSemaphoreGive(data->data_mutex);
+    return ESP_OK;
+}
+
+esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_ohm) {
+    if (g_ad5933_srv == NULL) return ESP_ERR_INVALID_STATE;
+    if (channel_index >= 10) return ESP_ERR_INVALID_ARG;
+    struct ad5933_service_data *data = (struct ad5933_service_data *)g_ad5933_srv->data;
+
+    xSemaphoreTake(data->data_mutex, portMAX_DELAY);
+    data->offsets[channel_index] = offset_ohm;
+    xSemaphoreGive(data->data_mutex);
+
+    // Save to NVS
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("ad5933", NVS_READWRITE, &my_handle);
+    if (err == ESP_OK) {
+        char key[16];
+        snprintf(key, sizeof(key), "offset_%u", channel_index);
+        uint64_t val_u64;
+        memcpy(&val_u64, &offset_ohm, sizeof(double));
+        nvs_set_u64(my_handle, key, val_u64);
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+    return ESP_OK;
 }
 
 esp_err_t ad5933_service_init(struct service *s,
@@ -509,7 +598,7 @@ esp_err_t ad5933_service_init(struct service *s,
 
     /* Driver Initialization with defaults */
     const struct ims_device *ad_dev = config->ad5933_dev;
-    ad5933_load_or_init_nvs_settings(ad_dev);
+    ad5933_load_or_init_nvs_settings(ad_dev, data);
     ad5933_set_settling_cycles(ad_dev, AD5933_DEFAULT_SETTLE_CYCLES, AD5933_SETTLE_X1);
 
     g_ad5933_srv = s;
