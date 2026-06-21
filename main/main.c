@@ -18,9 +18,11 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 #include "nvs_flash.h"
+#include "linenoise/linenoise.h"
 
 #include "board/board.h"
 #include "cmd.h"
+#include "cmd/console.h"
 #include "event.h"
 #include "service.h"
 #include "services/ad5933/ad5933_service.h"
@@ -58,31 +60,7 @@ static esp_err_t event_loop_init(void) {
     return esp_event_loop_create(&service_event_loop_args, &service_event_loop);
 }
 
-static void init_console(void) {
-    /* Initialize Console REPL */
-    esp_console_repl_t *repl = NULL;
-    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_config.prompt = "ims> ";
-    repl_config.max_history_len = 10;
 
-    esp_console_dev_uart_config_t uart_config =
-        ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-
-    /* Initialize console REPL environment */
-    ESP_ERROR_CHECK(
-        esp_console_new_repl_uart(&uart_config, &repl_config, &repl));
-
-    /* Register Commands */
-    register_system();
-    register_i2c_tool_command();
-    register_gpio_pin_command(40); // Max GPIOs
-    register_ad5933_command();
-    register_ad7680_command();
-    register_board_utils_command();
-
-    /* Start console REPL */
-    ESP_ERROR_CHECK(esp_console_start_repl(repl));
-}
 
 void app_main(void) {
     ESP_LOGI(TAG, "Starting IMS Application");

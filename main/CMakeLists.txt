@@ -4,6 +4,8 @@ set(APP_SRCS
     "board_utils.c"
     "event.c"
     "service.c"
+    "cmd/console.c"
+    "cmd/cmd_subcommands.c"
     "cmd/cmd_system.c"
     "cmd/cmd_gpio_pin.c"
     "cmd/cmd_i2c_tool.c"

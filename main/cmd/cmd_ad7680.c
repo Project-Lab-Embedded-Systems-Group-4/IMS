@@ -9,10 +9,9 @@
 #include "services/ad7680/ad7680_service.h"
 
 static struct {
-    struct arg_str *subcommand;
     struct arg_int *iterations;
     struct arg_end *end;
-} ad7680_args;
+} read_args;
 
 static int do_ad7680_read(int iterations) {
     extern esp_event_loop_handle_t service_event_loop;
@@ -28,36 +27,35 @@ static int do_ad7680_read(int iterations) {
     return 0;
 }
 
-static int do_ad7680_cmd(int argc, char **argv) {
-    PARSE_ARG(ad7680_args);
-
-    const char *sub = ad7680_args.subcommand->sval[0];
-
-    if (strcmp(sub, "read") == 0) {
-        int iters = 1;
-        if (ad7680_args.iterations->count > 0) {
-            iters = ad7680_args.iterations->ival[0];
-        }
-        return do_ad7680_read(iters);
-    } else {
-        printf("Unknown subcommand: %s. Use 'read'.\n", sub);
-        return 1;
+static int do_ad7680_read_cmd(int argc, char **argv) {
+    int iters = 1;
+    if (read_args.iterations->count > 0) {
+        iters = read_args.iterations->ival[0];
     }
+    return do_ad7680_read(iters);
+}
+
+static int do_ad7680_cmd(int argc, char **argv) {
+    return esp_console_dispatch_subcommand("ad7680", argc, argv);
 }
 
 esp_err_t register_ad7680_command(void) {
-    ad7680_args.subcommand =
-        arg_str1(NULL, NULL, "<read>", "Sub-command to execute");
-    ad7680_args.iterations =
+    read_args.iterations =
         arg_int0("i", "iterations", "<n>", "Number of iterations for averaging");
-    ad7680_args.end = arg_end(2);
+    read_args.end = arg_end(1);
+
+    static const esp_console_subcmd_t subcmds[] = {
+        { .name = "read", .help = "Read analog input from AD7680", .func = &do_ad7680_read_cmd, .argtable = &read_args }
+    };
+
+    ESP_ERROR_CHECK(esp_console_register_subcommands("ad7680", subcmds, sizeof(subcmds) / sizeof(subcmds[0])));
 
     const esp_console_cmd_t cmd = {
         .command = "ad7680",
         .help = "AD7680 ADC control commands",
         .hint = NULL,
         .func = &do_ad7680_cmd,
-        .argtable = &ad7680_args,
+        .argtable = NULL,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 

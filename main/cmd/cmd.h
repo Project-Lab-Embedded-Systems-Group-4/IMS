@@ -2,6 +2,7 @@
 #define IMS_CMD_CMD_H_
 
 #include <esp_err.h>
+#include <esp_console.h>
 #include <stdio.h>
 #include <argtable3/argtable3.h>
 #include "board/board.h"
@@ -46,5 +47,24 @@ esp_err_t register_gpio_pin_command(size_t max_num);
 esp_err_t register_ad5933_command(void);
 esp_err_t register_ad7680_command(void);
 esp_err_t register_board_utils_command(void);
+
+/* Subcommand Framework Types */
+typedef struct {
+    const char *name;         /**< Subcommand name, e.g., "sweep" */
+    const char *help;         /**< Subcommand description */
+    esp_console_cmd_func_t func; /**< Subcommand handler function */
+    void *argtable;           /**< Argtable structure for the subcommand */
+} esp_console_subcmd_t;
+
+typedef struct {
+    const char *parent_cmd;
+    const esp_console_subcmd_t *subcmds;
+    size_t subcmd_count;
+} esp_console_subcmd_table_t;
+
+/* Subcommand Framework API */
+esp_err_t esp_console_register_subcommands(const char *parent_cmd, const esp_console_subcmd_t *subcmds, size_t subcmd_count);
+const esp_console_subcmd_table_t *esp_console_get_subcommand_table(const char *parent_cmd);
+int esp_console_dispatch_subcommand(const char *parent_cmd, int argc, char **argv);
 
 #endif // IMS_CMD_CMD_H_

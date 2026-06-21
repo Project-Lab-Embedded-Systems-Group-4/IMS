@@ -93,9 +93,6 @@ struct ad5933_service_data {
     bool continuous;
     int interval_ms;
     int average_times;
-    uint16_t orig_num_inc;
-    uint32_t orig_inc_freq;
-    bool has_saved_orig;
     bool stop_requested;
     double offsets[10];
     uint32_t offset_freqs[10];
@@ -349,14 +346,6 @@ static void ad5933_service_task(void *arg) {
             break;
 
         case AD5933_STATE_STANDBY:
-            if (data->continuous && data->average_times > 1 && !data->has_saved_orig) {
-                ad5933_get_num_inc(ad_dev, &data->orig_num_inc);
-                ad5933_get_inc_freq(ad_dev, &data->orig_inc_freq);
-                data->has_saved_orig = true;
-
-                ad5933_set_num_inc(ad_dev, data->average_times);
-                ad5933_set_inc_freq(ad_dev, 0);
-            }
 
             ad5933_get_ctrl_reg1(ad_dev, &ctrl1);
             ctrl1.function_code = AD5933_FUNC_STANDBY;
@@ -420,11 +409,6 @@ static void ad5933_service_task(void *arg) {
             if (timeout) {
                 board_measure_enable(false);
                 board_utils_unlock();
-                if (data->has_saved_orig) {
-                    ad5933_set_num_inc(ad_dev, data->orig_num_inc);
-                    ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
-                    data->has_saved_orig = false;
-                }
                 data->now_state = AD5933_STATE_IDLE;
                 break;
             }
@@ -480,11 +464,6 @@ static void ad5933_service_task(void *arg) {
                         data->now_state = AD5933_STATE_IDLE;
                         xSemaphoreGive(data->start_sem);
                     } else {
-                        if (data->has_saved_orig) {
-                            ad5933_set_num_inc(ad_dev, data->orig_num_inc);
-                            ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
-                            data->has_saved_orig = false;
-                        }
                         data->now_state = AD5933_STATE_IDLE;
                         data->is_calibrating = false;
                     }
