@@ -13,6 +13,10 @@
 #include "services/ad5933/ad5933_service.h"
 #include "nvs.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static struct {
     struct arg_str *subcommand;
     struct arg_int *start;
@@ -98,6 +102,14 @@ static int do_ad5933_dump(void) {
         return 0;
     }
 
+    const struct ims_device *dev = board_get_device("ad5933");
+    if (!dev) {
+        printf("AD5933 device not found\n");
+        return 1;
+    }
+    uint32_t start_freq = 0;
+    ad5933_get_start_freq(dev, &start_freq);
+
     struct board_utils_info board_info;
     board_utils_get_info(&board_info);
     double offsets[10] = {0};
@@ -117,9 +129,23 @@ static int do_ad5933_dump(void) {
         double gf = gain_factors[i];
         double impedance = 0;
         if (gf != 0 && magnitude != 0) {
-            impedance = 1.0 / (gf * magnitude);
-            impedance -= offset;
-            if (impedance < 0) impedance = 0;
+            double raw_impedance = 1.0 / (gf * magnitude);
+            if (offset > 0.0) {
+                double f = (double)start_freq;
+                if (f > 0.0) {
+                    double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
+                    double C_corrected_pf = C_pF - offset;
+                    if (C_corrected_pf > 0.0) {
+                        impedance = 1e12 / (2.0 * M_PI * f * C_corrected_pf);
+                    } else {
+                        impedance = INFINITY;
+                    }
+                } else {
+                    impedance = raw_impedance;
+                }
+            } else {
+                impedance = raw_impedance;
+            }
         }
         printf("%-6d | %-8d | %-8d | %-12.2f | %-15.2e | %-15.2f\n", i, samples[i].real,
                samples[i].imag, magnitude, gf, impedance);
@@ -218,9 +244,9 @@ static int do_ad5933_cmd(int argc, char **argv) {
         printf("                       -r, --range=<0-3>: excitation voltage range\n");
         printf("  reset                Perform a hardware reset\n");
         printf("  stop                 Stop the active continuous sweep\n");
-        printf("  offset [options]     Set or get channel impedance offsets\n");
+        printf("  offset [options]     Set or get channel capacitance offsets\n");
         printf("                       -c, --offset-ch=<1-10>: active subject channel\n");
-        printf("                       -o, --offset-val=<ohm>: offset value in Ohms\n");
+        printf("                       -o, --offset-val=<pF>: offset value in pF\n");
         return 0;
     } else if (strcmp(sub, "info") == 0) {
         return do_ad5933_info(dev);
@@ -356,7 +382,7 @@ static int do_ad5933_cmd(int argc, char **argv) {
             }
             esp_err_t err = ad5933_service_set_offset((uint8_t)(ch - 1), val);
             if (err == ESP_OK) {
-                printf("Offset for channel %d set to %.2f Ohm.\n", ch, val);
+                printf("Offset for channel %d set to %.2f pF.\n", ch, val);
             } else {
                 printf("Failed to set offset: %s\n", esp_err_to_name(err));
             }
@@ -365,9 +391,9 @@ static int do_ad5933_cmd(int argc, char **argv) {
             double offsets[10] = {0};
             esp_err_t err = ad5933_service_get_offsets(offsets, 10);
             if (err == ESP_OK) {
-                printf("AD5933 Channel Impedance Offsets:\n");
+                printf("AD5933 Channel Capacitance Offsets:\n");
                 for (int i = 0; i < 10; i++) {
-                    printf("\tChannel %2d: %8.2f Ohm\n", i + 1, offsets[i]);
+                    printf("\tChannel %2d: %8.2f pF\n", i + 1, offsets[i]);
                 }
             } else {
                 printf("Failed to get offsets: %s\n", esp_err_to_name(err));
@@ -394,7 +420,7 @@ esp_err_t register_ad5933_command(void) {
                                  "Range: 0=2V, 1=200mV, 2=400mV, 3=1V");
     ad5933_args.fb = arg_int0("f", "fb", "<0-3>", "ZM Feedback index (for 'cal'): 0:2k, 1:10k, 2:100k, 3:330k");
     ad5933_args.offset_ch = arg_int0("c", "offset-ch", "<1-10>", "Subject channel (1-10) for offset");
-    ad5933_args.offset_val = arg_dbl0("o", "offset-val", "<ohm>", "Offset impedance in Ohms");
+    ad5933_args.offset_val = arg_dbl0("o", "offset-val", "<pF>", "Offset capacitance in pF");
     ad5933_args.end = arg_end(10);
 
     const esp_console_cmd_t cmd = {

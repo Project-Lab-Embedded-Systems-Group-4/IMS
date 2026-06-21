@@ -16,6 +16,10 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #define TAG "ad5933_srv"
 
 /* Default Sweep Configuration */
@@ -32,28 +36,28 @@
 #define AD5933_CALI_RESISTOR 49900.0
 #define AD5933_CALI_FB_INDEX 1
 
-#define AD5933_DEFAULT_CH1_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH2_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH3_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH4_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH5_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH6_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH7_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH8_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH9_OFFSET_OHM 0.0
-#define AD5933_DEFAULT_CH10_OFFSET_OHM 0.0
+#define AD5933_DEFAULT_CH1_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH2_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH3_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH4_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH5_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH6_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH7_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH8_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH9_OFFSET_PF 0.0
+#define AD5933_DEFAULT_CH10_OFFSET_PF 0.0
 
 static const double ad5933_default_offsets[10] = {
-    AD5933_DEFAULT_CH1_OFFSET_OHM,
-    AD5933_DEFAULT_CH2_OFFSET_OHM,
-    AD5933_DEFAULT_CH3_OFFSET_OHM,
-    AD5933_DEFAULT_CH4_OFFSET_OHM,
-    AD5933_DEFAULT_CH5_OFFSET_OHM,
-    AD5933_DEFAULT_CH6_OFFSET_OHM,
-    AD5933_DEFAULT_CH7_OFFSET_OHM,
-    AD5933_DEFAULT_CH8_OFFSET_OHM,
-    AD5933_DEFAULT_CH9_OFFSET_OHM,
-    AD5933_DEFAULT_CH10_OFFSET_OHM
+    AD5933_DEFAULT_CH1_OFFSET_PF,
+    AD5933_DEFAULT_CH2_OFFSET_PF,
+    AD5933_DEFAULT_CH3_OFFSET_PF,
+    AD5933_DEFAULT_CH4_OFFSET_PF,
+    AD5933_DEFAULT_CH5_OFFSET_PF,
+    AD5933_DEFAULT_CH6_OFFSET_PF,
+    AD5933_DEFAULT_CH7_OFFSET_PF,
+    AD5933_DEFAULT_CH8_OFFSET_PF,
+    AD5933_DEFAULT_CH9_OFFSET_PF,
+    AD5933_DEFAULT_CH10_OFFSET_PF
 };
 
 enum ad5933_service_state {
@@ -192,6 +196,11 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 offset = data->offsets[board_info.subj_channel];
             }
 
+            uint32_t start_freq = 0;
+            struct ad5933_service_config *cfg = (struct ad5933_service_config *)s->config;
+            const struct ims_device *ad_dev = cfg->ad5933_dev;
+            ad5933_get_start_freq(ad_dev, &start_freq);
+
             if (was_continuous) {
                 double sum_real = 0;
                 double sum_imag = 0;
@@ -206,9 +215,19 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 double gf = data->gain_factors[0];
                 double impedance = 0;
                 if (gf != 0 && magnitude != 0) {
-                    impedance = 1.0 / (gf * magnitude);
-                    impedance -= offset;
-                    if (impedance < 0) impedance = 0;
+                    double raw_impedance = 1.0 / (gf * magnitude);
+                    if (offset > 0.0 && start_freq > 0) {
+                        double f = (double)start_freq;
+                        double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
+                        double C_corrected_pf = C_pF - offset;
+                        if (C_corrected_pf > 0.0) {
+                            impedance = 1e12 / (2.0 * M_PI * f * C_corrected_pf);
+                        } else {
+                            impedance = INFINITY;
+                        }
+                    } else {
+                        impedance = raw_impedance;
+                    }
                 }
 
                 static uint32_t sweep_num = 0;
@@ -226,9 +245,23 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     double gf = data->gain_factors[i];
                     double impedance = 0;
                     if (gf != 0 && magnitude != 0) {
-                        impedance = 1.0 / (gf * magnitude);
-                        impedance -= offset;
-                        if (impedance < 0) impedance = 0;
+                        double raw_impedance = 1.0 / (gf * magnitude);
+                        if (offset > 0.0) {
+                            double f = (double)start_freq;
+                            if (f > 0.0) {
+                                double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
+                                double C_corrected_pf = C_pF - offset;
+                                if (C_corrected_pf > 0.0) {
+                                    impedance = 1e12 / (2.0 * M_PI * f * C_corrected_pf);
+                                } else {
+                                    impedance = INFINITY;
+                                }
+                            } else {
+                                impedance = raw_impedance;
+                            }
+                        } else {
+                            impedance = raw_impedance;
+                        }
                     }
                     printf("%-5d | %-10d | %-10d | %-12.2f | %-12.2e | %-15.2f\n", i,
                            data->samples[i].real, data->samples[i].imag, magnitude,
