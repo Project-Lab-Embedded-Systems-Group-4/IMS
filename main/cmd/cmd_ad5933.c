@@ -5,6 +5,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "board/board.h"
 #include "cmd.h"
@@ -12,6 +14,43 @@
 #include "board_utils.h"
 #include "services/ad5933/ad5933_service.h"
 #include "nvs.h"
+
+static void trim_trailing(char *str) {
+    int len = strlen(str);
+    while (len > 0 && (str[len - 1] == ' ' || str[len - 1] == '\t' || str[len - 1] == '\r' || str[len - 1] == '\n')) {
+        str[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void get_line_interactive(char *buf, size_t max_len) {
+    size_t index = 0;
+    while (index < max_len - 1) {
+        int c = getchar();
+        if (c == EOF) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        if (c == '\r' || c == '\n') {
+            printf("\n");
+            break;
+        }
+        if (c == '\b' || c == 127) {
+            if (index > 0) {
+                index--;
+                printf("\b \b");
+                fflush(stdout);
+            }
+            continue;
+        }
+        if (c >= 32 && c <= 126) {
+            buf[index++] = c;
+            putchar(c);
+            fflush(stdout);
+        }
+    }
+    buf[index] = '\0';
+}
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -247,6 +286,7 @@ static int do_ad5933_cmd(int argc, char **argv) {
         printf("  offset [options]     Set or get channel capacitance offsets\n");
         printf("                       -c, --offset-ch=<1-10>: active subject channel\n");
         printf("                       -o, --offset-val=<pF>: offset value in pF\n");
+        printf("  prep                 Run interactive calibration and offset preparation wizard\n");
         return 0;
     } else if (strcmp(sub, "info") == 0) {
         return do_ad5933_info(dev);
@@ -400,15 +440,175 @@ static int do_ad5933_cmd(int argc, char **argv) {
             }
         }
         return 0;
+    } else if (strcmp(sub, "prep") == 0) {
+        char input_buf[64];
+        
+        // 1. start_freq
+        uint32_t start_freq = 10000;
+        printf("Enter start frequency in Hz [default: 10000]: ");
+        fflush(stdout);
+        get_line_interactive(input_buf, sizeof(input_buf));
+        trim_trailing(input_buf);
+        if (strlen(input_buf) > 0) {
+            uint32_t val = strtoul(input_buf, NULL, 10);
+            if (val > 0) {
+                start_freq = val;
+            } else {
+                printf("Invalid frequency, using default: %" PRIu32 " Hz\n", start_freq);
+            }
+        }
+        
+        // 2. Reference resistor index
+        int ref_res_idx = 3;
+        printf("Enter reference resistor index (0: 2k, 1: 10k, 2: 100k, 3: 330k) [default: 3]: ");
+        fflush(stdout);
+        get_line_interactive(input_buf, sizeof(input_buf));
+        trim_trailing(input_buf);
+        if (strlen(input_buf) > 0) {
+            int val = atoi(input_buf);
+            if (val >= 0 && val <= 3) {
+                ref_res_idx = val;
+            } else {
+                printf("Invalid reference index, using default: %d\n", ref_res_idx);
+            }
+        }
+        
+        // 3. Subject channel
+        int subject_channel = 1;
+        bool all_channels = false;
+        printf("Enter subject channel (1-10 or 'all') [default: 1]: ");
+        fflush(stdout);
+        get_line_interactive(input_buf, sizeof(input_buf));
+        trim_trailing(input_buf);
+        if (strlen(input_buf) > 0) {
+            if (strcmp(input_buf, "all") == 0) {
+                all_channels = true;
+            } else {
+                int val = atoi(input_buf);
+                if (val >= 1 && val <= 10) {
+                    subject_channel = val;
+                } else {
+                    printf("Invalid channel, using default: %d\n", subject_channel);
+                }
+            }
+        }
+        
+        // 4. Averaging iteration count
+        int avg_times = 10;
+        printf("Enter averaging iteration count [default: 10]: ");
+        fflush(stdout);
+        get_line_interactive(input_buf, sizeof(input_buf));
+        trim_trailing(input_buf);
+        if (strlen(input_buf) > 0) {
+            int val = atoi(input_buf);
+            if (val > 0) {
+                avg_times = val;
+            } else {
+                printf("Invalid iteration count, using default: %d\n", avg_times);
+            }
+        }
+        
+        // 5. Warning and confirmation
+        printf("\nWARNING: Please disconnect all DUTs from the board before proceeding.\n");
+        printf("Press ENTER to start preparation wizard...");
+        fflush(stdout);
+        get_line_interactive(input_buf, sizeof(input_buf));
+
+        // Configure parameters on device
+        ad5933_set_start_freq(dev, start_freq);
+        ad5933_set_inc_freq(dev, 0);
+        ad5933_set_num_inc(dev, avg_times > 0 ? avg_times - 1 : 0);
+
+        // Post calibration request
+        extern esp_event_loop_handle_t service_event_loop;
+        uint8_t fb = (uint8_t)ref_res_idx;
+        esp_err_t err = esp_event_post_to(
+            service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_START_CAL,
+            &fb, sizeof(fb), portMAX_DELAY);
+        if (err != ESP_OK) {
+            printf("ERROR: Failed to post calibration event: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        printf("Calibrating on reference resistor %d...\n", ref_res_idx);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        struct ad5933_sample_data *dummy_samples;
+        double *dummy_gf;
+        uint16_t dummy_count;
+        while (ad5933_service_get_results(&dummy_samples, &dummy_gf, &dummy_count) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        printf("Calibration completed.\n");
+
+        int start_ch = all_channels ? 0 : (subject_channel - 1);
+        int end_ch = all_channels ? 9 : (subject_channel - 1);
+
+        for (int ch = start_ch; ch <= end_ch; ch++) {
+            printf("Measuring open-circuit stray capacitance on Channel %d...\n", ch + 1);
+            board_set_subj_channel((enum board_subj_channel)ch);
+
+            struct ad5933_sweep_params params = {
+                .continuous = false,
+                .interval_ms = 50,
+                .average_times = avg_times,
+            };
+
+            err = esp_event_post_to(
+                service_event_loop, IMS_EVENT_BASE, IMS_EVENT_AD5933_START_SWEEP,
+                &params, sizeof(params), portMAX_DELAY);
+            if (err != ESP_OK) {
+                printf("ERROR: Failed to post sweep event for channel %d: %s\n", ch + 1, esp_err_to_name(err));
+                continue;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            struct ad5933_sample_data *samples;
+            double *gain_factors;
+            uint16_t count;
+            while (ad5933_service_get_results(&samples, &gain_factors, &count) != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+
+            double sum_raw_impedance = 0;
+            int valid_count = 0;
+            for (int i = 0; i < count; i++) {
+                double magnitude = sqrt((double)samples[i].real * samples[i].real +
+                                        (double)samples[i].imag * samples[i].imag);
+                double gf = gain_factors[i];
+                if (gf != 0 && magnitude != 0) {
+                    sum_raw_impedance += 1.0 / (gf * magnitude);
+                    valid_count++;
+                }
+            }
+
+            if (valid_count > 0) {
+                double avg_raw_impedance = sum_raw_impedance / valid_count;
+                double f = (double)start_freq;
+                double C_pF = 0;
+                if (f > 0.0 && avg_raw_impedance > 0.0) {
+                    C_pF = 1e12 / (2.0 * M_PI * f * avg_raw_impedance);
+                }
+
+                err = ad5933_service_set_offset((uint8_t)ch, C_pF);
+                if (err == ESP_OK) {
+                    printf("SUCCESS: Offset for channel %d successfully set to %.2f pF and saved to flash.\n", ch + 1, C_pF);
+                } else {
+                    printf("ERROR: Failed to save offset for channel %d: %s\n", ch + 1, esp_err_to_name(err));
+                }
+            } else {
+                printf("ERROR: No valid sweep data received for channel %d.\n", ch + 1);
+            }
+        }
+        return 0;
     } else {
-        printf("Unknown subcommand: %s. Use info, sweep, dump, cal, set, reset, stop, offset, or help.\n", sub);
+        printf("Unknown subcommand: %s. Use info, sweep, dump, cal, set, reset, stop, offset, prep, or help.\n", sub);
         return 1;
     }
 }
 
 esp_err_t register_ad5933_command(void) {
     ad5933_args.subcommand =
-        arg_str1(NULL, NULL, "<info|sweep|dump|cal|set|reset|stop|offset|help>", "Sub-command to execute");
+        arg_str1(NULL, NULL, "<info|sweep|dump|cal|set|reset|stop|offset|prep|help>", "Sub-command to execute");
     ad5933_args.start = arg_int0("s", "start", "<Hz>", "Start frequency in Hz");
     ad5933_args.inc =
         arg_int0("i", "inc", "<Hz>", "Increment frequency in Hz");
