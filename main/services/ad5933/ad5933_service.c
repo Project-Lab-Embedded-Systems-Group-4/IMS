@@ -99,6 +99,10 @@ struct ad5933_service_data {
     bool stop_requested;
     double offsets[10];
     uint32_t offset_freqs[10];
+    bool override_channel;
+    int start_channel;
+    int end_channel;
+    int current_sweep_channel;
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -118,10 +122,22 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 data->continuous = params->continuous;
                 data->interval_ms = params->interval_ms;
                 data->average_times = params->average_times;
+                data->override_channel = params->override_channel;
+                data->start_channel = params->start_channel;
+                data->end_channel = params->end_channel;
+                if (params->override_channel) {
+                    data->current_sweep_channel = params->start_channel;
+                } else {
+                    data->current_sweep_channel = -1;
+                }
             } else {
                 data->continuous = false;
                 data->interval_ms = 1000;
                 data->average_times = 1;
+                data->override_channel = false;
+                data->start_channel = -1;
+                data->end_channel = -1;
+                data->current_sweep_channel = -1;
             }
             xSemaphoreGive(data->start_sem);
             break;
@@ -154,6 +170,10 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
             data->continuous = false;
             data->interval_ms = 1000;
             data->average_times = 1;
+            data->override_channel = false;
+            data->start_channel = -1;
+            data->end_channel = -1;
+            data->current_sweep_channel = -1;
             xSemaphoreGive(data->start_sem);
             break;
         }
@@ -233,8 +253,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
 
                 static uint32_t sweep_num = 0;
                 sweep_num++;
-                printf("#%" PRIu32 " | Real: %.2f | Imag: %.2f | Mag: %.2f | Imp: %.2f Ohm\n",
-                       sweep_num, avg_real, avg_imag, magnitude, impedance);
+                printf("#%" PRIu32 " | Ch %2d | Imp: %.2f Ohm\n",
+                       sweep_num, board_info.subj_channel + 1, impedance);
             } else {
                 printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
                        "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
@@ -346,7 +366,9 @@ static void ad5933_service_task(void *arg) {
             data->sample_count = 0;
             xSemaphoreGive(data->data_mutex);
 
-            //ad5933_set_start_freq(ad_dev, drv_data->start_freq);
+            if (data->override_channel && data->current_sweep_channel >= 0) {
+                board_set_subj_channel((enum board_subj_channel)data->current_sweep_channel);
+            }
 
             board_measure_enable(true);
 
@@ -443,17 +465,29 @@ static void ad5933_service_task(void *arg) {
                 }
 
                 if (data->continuous) {
+                    if (data->override_channel && data->current_sweep_channel >= 0) {
+                        data->current_sweep_channel++;
+                        if (data->current_sweep_channel > data->end_channel) {
+                            data->current_sweep_channel = data->start_channel;
+                        }
+                    }
                     vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
                     data->now_state = AD5933_STATE_IDLE;
                     xSemaphoreGive(data->start_sem);
                 } else {
-                    if (data->has_saved_orig) {
-                        ad5933_set_num_inc(ad_dev, data->orig_num_inc);
-                        ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
-                        data->has_saved_orig = false;
+                    if (data->override_channel && data->current_sweep_channel >= 0 && data->current_sweep_channel < data->end_channel) {
+                        data->current_sweep_channel++;
+                        data->now_state = AD5933_STATE_IDLE;
+                        xSemaphoreGive(data->start_sem);
+                    } else {
+                        if (data->has_saved_orig) {
+                            ad5933_set_num_inc(ad_dev, data->orig_num_inc);
+                            ad5933_set_inc_freq(ad_dev, data->orig_inc_freq);
+                            data->has_saved_orig = false;
+                        }
+                        data->now_state = AD5933_STATE_IDLE;
+                        data->is_calibrating = false;
                     }
-                    data->now_state = AD5933_STATE_IDLE;
-                    data->is_calibrating = false;
                 }
             } else {
                 /* Increment frequency for the next point */

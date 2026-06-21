@@ -236,6 +236,7 @@ static int do_ad5933_cmd(int argc, char **argv) {
     bool continuous = false;
     int interval_ms = 1000;
     int average_times = 1;
+    char sweep_channel[16] = "";
 
     if (argc >= 2 && strcmp(argv[1], "sweep") == 0) {
         for (int i = 2; i < argc; ) {
@@ -267,6 +268,17 @@ static int do_ad5933_cmd(int argc, char **argv) {
                     printf("Error: -a requires an integer value\n");
                     return 1;
                 }
+            } else if (strcmp(argv[i], "-ch") == 0) {
+                if (i + 1 < argc) {
+                    strncpy(sweep_channel, argv[i+1], sizeof(sweep_channel) - 1);
+                    for (int j = i; j < argc - 2; j++) {
+                        argv[j] = argv[j + 2];
+                    }
+                    argc -= 2;
+                } else {
+                    printf("Error: -ch requires a channel value (1-10 or 'all')\n");
+                    return 1;
+                }
             } else {
                 i++;
             }
@@ -290,6 +302,7 @@ static int do_ad5933_cmd(int argc, char **argv) {
         printf("                       -c: continuously sweep in the background\n");
         printf("                       -i <ms>: interval between continuous sweeps (default: 1000)\n");
         printf("                       -a <count>: number of points to sweep and average (sets num increments)\n");
+        printf("                       -ch <1-10|all>: subject channel or all channels to sweep\n");
         printf("  dump                 Display results of the last sweep\n");
         printf("  cal [-f <0-3>]       Start calibration using feedback resistor index\n");
         printf("                       -f: feedback index (0:2k, 1:10k, 2:100k, 3:330k)\n");
@@ -324,10 +337,33 @@ static int do_ad5933_cmd(int argc, char **argv) {
         }
         return 0;
     } else if (strcmp(sub, "sweep") == 0) {
+        bool override_ch = false;
+        int start_ch = -1;
+        int end_ch = -1;
+        if (strlen(sweep_channel) > 0) {
+            override_ch = true;
+            if (strcmp(sweep_channel, "all") == 0) {
+                start_ch = 0;
+                end_ch = 9;
+            } else {
+                int val = atoi(sweep_channel);
+                if (val >= 1 && val <= 10) {
+                    start_ch = val - 1;
+                    end_ch = val - 1;
+                } else {
+                    printf("Error: channel must be 1-10 or 'all'\n");
+                    return 1;
+                }
+            }
+        }
+
         struct ad5933_sweep_params params = {
             .continuous = continuous,
             .interval_ms = interval_ms,
             .average_times = average_times,
+            .override_channel = override_ch,
+            .start_channel = start_ch,
+            .end_channel = end_ch,
         };
 
         extern esp_event_loop_handle_t service_event_loop;

@@ -120,6 +120,9 @@ struct ad5933_sweep_params {
     bool continuous;
     int interval_ms;
     int average_times;
+    bool override_channel;
+    int start_channel;
+    int end_channel;
 };
 
 struct ad5933_data_ready_params {
