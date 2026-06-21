@@ -29,7 +29,7 @@ esp_err_t ad5933_service_get_results(struct ad5933_sample_data **out_samples,
                                      double **out_gain_factors,
                                      uint16_t *out_count);
 
-esp_err_t ad5933_service_get_offsets(double *out_offsets, uint8_t count);
-esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_ohm);
+esp_err_t ad5933_service_get_offsets(double *out_offsets, uint32_t *out_freqs, uint8_t count);
+esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_pf, uint32_t freq_hz);
 
 #endif // IMS_SERVICES_AD5933_SERVICE_H_

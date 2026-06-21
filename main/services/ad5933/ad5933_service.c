@@ -98,6 +98,7 @@ struct ad5933_service_data {
     bool has_saved_orig;
     bool stop_requested;
     double offsets[10];
+    uint32_t offset_freqs[10];
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -512,6 +513,7 @@ static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev, st
         ad5933_set_voltage_range(ad_dev, AD5933_DEFAULT_VOLTAGE_RANGE);
         ad5933_set_pga_gain(ad_dev, AD5933_DEFAULT_PGA_GAIN);
         memcpy(data->offsets, ad5933_default_offsets, sizeof(ad5933_default_offsets));
+        memset(data->offset_freqs, 0, sizeof(data->offset_freqs));
         return;
     }
 
@@ -550,7 +552,7 @@ static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev, st
     }
     ad5933_set_pga_gain(ad_dev, (enum ad5933_pga_gain)pga_gain);
 
-    // Load offsets
+    // Load offsets and frequencies
     for (uint8_t i = 0; i < 10; i++) {
         char key[16];
         snprintf(key, sizeof(key), "offset_%u", i);
@@ -566,29 +568,47 @@ static void ad5933_load_or_init_nvs_settings(const struct ims_device *ad_dev, st
             memcpy(&offset_val, &val_u64, sizeof(double));
             data->offsets[i] = offset_val;
         }
+
+        char freq_key[16];
+        snprintf(freq_key, sizeof(freq_key), "off_freq_%u", i);
+        uint32_t freq_val = 0;
+        err = nvs_get_u32(my_handle, freq_key, &freq_val);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            freq_val = 0;
+            nvs_set_u32(my_handle, freq_key, freq_val);
+            data->offset_freqs[i] = freq_val;
+        } else {
+            data->offset_freqs[i] = freq_val;
+        }
     }
 
     nvs_commit(my_handle);
     nvs_close(my_handle);
 }
 
-esp_err_t ad5933_service_get_offsets(double *out_offsets, uint8_t count) {
+esp_err_t ad5933_service_get_offsets(double *out_offsets, uint32_t *out_freqs, uint8_t count) {
     if (g_ad5933_srv == NULL) return ESP_ERR_INVALID_STATE;
     struct ad5933_service_data *data = (struct ad5933_service_data *)g_ad5933_srv->data;
     if (count > 10) count = 10;
     xSemaphoreTake(data->data_mutex, portMAX_DELAY);
-    memcpy(out_offsets, data->offsets, count * sizeof(double));
+    if (out_offsets != NULL) {
+        memcpy(out_offsets, data->offsets, count * sizeof(double));
+    }
+    if (out_freqs != NULL) {
+        memcpy(out_freqs, data->offset_freqs, count * sizeof(uint32_t));
+    }
     xSemaphoreGive(data->data_mutex);
     return ESP_OK;
 }
 
-esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_ohm) {
+esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_pf, uint32_t freq_hz) {
     if (g_ad5933_srv == NULL) return ESP_ERR_INVALID_STATE;
     if (channel_index >= 10) return ESP_ERR_INVALID_ARG;
     struct ad5933_service_data *data = (struct ad5933_service_data *)g_ad5933_srv->data;
 
     xSemaphoreTake(data->data_mutex, portMAX_DELAY);
-    data->offsets[channel_index] = offset_ohm;
+    data->offsets[channel_index] = offset_pf;
+    data->offset_freqs[channel_index] = freq_hz;
     xSemaphoreGive(data->data_mutex);
 
     // Save to NVS
@@ -598,8 +618,13 @@ esp_err_t ad5933_service_set_offset(uint8_t channel_index, double offset_ohm) {
         char key[16];
         snprintf(key, sizeof(key), "offset_%u", channel_index);
         uint64_t val_u64;
-        memcpy(&val_u64, &offset_ohm, sizeof(double));
+        memcpy(&val_u64, &offset_pf, sizeof(double));
         nvs_set_u64(my_handle, key, val_u64);
+
+        char freq_key[16];
+        snprintf(freq_key, sizeof(freq_key), "off_freq_%u", channel_index);
+        nvs_set_u32(my_handle, freq_key, freq_hz);
+
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }

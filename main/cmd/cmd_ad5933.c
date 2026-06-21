@@ -122,6 +122,24 @@ static int do_ad5933_info(const struct ims_device *dev) {
     }
     printf("\tVoltage:     %s\n", range_str);
 
+    printf("\nChannel Offsets & Calibration Frequencies:\n");
+    double offsets[10] = {0};
+    uint32_t freqs[10] = {0};
+    esp_err_t err = ad5933_service_get_offsets(offsets, freqs, 10);
+    if (err == ESP_OK) {
+        printf("  Channel | Offset (pF) | Cal Frequency (Hz)\n");
+        printf("  --------|-------------|-------------------\n");
+        for (int i = 0; i < 10; i++) {
+            if (freqs[i] > 0) {
+                printf("    %5d | %11.2f | %18" PRIu32 "\n", i + 1, offsets[i], freqs[i]);
+            } else {
+                printf("    %5d | %11.2f | %18s\n", i + 1, offsets[i], "N/A");
+            }
+        }
+    } else {
+        printf("  Failed to get offsets: %s\n", esp_err_to_name(err));
+    }
+
     return 0;
 }
 
@@ -152,7 +170,7 @@ static int do_ad5933_dump(void) {
     struct board_utils_info board_info;
     board_utils_get_info(&board_info);
     double offsets[10] = {0};
-    ad5933_service_get_offsets(offsets, 10);
+    ad5933_service_get_offsets(offsets, NULL, 10);
     double offset = 0;
     if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
         offset = offsets[board_info.subj_channel];
@@ -420,20 +438,29 @@ static int do_ad5933_cmd(int argc, char **argv) {
                 printf("Error: Offset must be non-negative\n");
                 return 1;
             }
-            esp_err_t err = ad5933_service_set_offset((uint8_t)(ch - 1), val);
+            uint32_t start_freq = 0;
+            ad5933_get_start_freq(dev, &start_freq);
+            esp_err_t err = ad5933_service_set_offset((uint8_t)(ch - 1), val, start_freq);
             if (err == ESP_OK) {
-                printf("Offset for channel %d set to %.2f pF.\n", ch, val);
+                printf("Offset for channel %d set to %.2f pF at %" PRIu32 " Hz.\n", ch, val, start_freq);
             } else {
                 printf("Failed to set offset: %s\n", esp_err_to_name(err));
             }
         } else {
             // Print all offsets
             double offsets[10] = {0};
-            esp_err_t err = ad5933_service_get_offsets(offsets, 10);
+            uint32_t freqs[10] = {0};
+            esp_err_t err = ad5933_service_get_offsets(offsets, freqs, 10);
             if (err == ESP_OK) {
                 printf("AD5933 Channel Capacitance Offsets:\n");
+                printf("  Channel | Offset (pF) | Cal Frequency (Hz)\n");
+                printf("  --------|-------------|-------------------\n");
                 for (int i = 0; i < 10; i++) {
-                    printf("\tChannel %2d: %8.2f pF\n", i + 1, offsets[i]);
+                    if (freqs[i] > 0) {
+                        printf("    %5d | %11.2f | %18" PRIu32 "\n", i + 1, offsets[i], freqs[i]);
+                    } else {
+                        printf("    %5d | %11.2f | %18s\n", i + 1, offsets[i], "N/A");
+                    }
                 }
             } else {
                 printf("Failed to get offsets: %s\n", esp_err_to_name(err));
@@ -589,9 +616,9 @@ static int do_ad5933_cmd(int argc, char **argv) {
                     C_pF = 1e12 / (2.0 * M_PI * f * avg_raw_impedance);
                 }
 
-                err = ad5933_service_set_offset((uint8_t)ch, C_pF);
+                err = ad5933_service_set_offset((uint8_t)ch, C_pF, start_freq);
                 if (err == ESP_OK) {
-                    printf("SUCCESS: Offset for channel %d successfully set to %.2f pF and saved to flash.\n", ch + 1, C_pF);
+                    printf("SUCCESS: Offset for channel %d successfully set to %.2f pF at %" PRIu32 " Hz and saved to flash.\n", ch + 1, C_pF, start_freq);
                 } else {
                     printf("ERROR: Failed to save offset for channel %d: %s\n", ch + 1, esp_err_to_name(err));
                 }
