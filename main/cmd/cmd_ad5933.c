@@ -310,20 +310,18 @@ static int do_ad5933_sweep(int argc, char **argv) {
     const char *sweep_channel = sweep_args.channel->count > 0 ? sweep_args.channel->sval[0] : "";
 
     bool override_ch = false;
-    bool channels[10] = {false};
+    uint16_t channel_mask = 0;
     if (strlen(sweep_channel) > 0) {
         override_ch = true;
         if (strcmp(sweep_channel, "all") == 0) {
-            for (int i = 0; i < 10; i++) {
-                channels[i] = true;
-            }
+            channel_mask = 0x3FF; // 10 bits set
         } else {
             char *temp = strdup(sweep_channel);
             char *token = strtok(temp, ",");
             while (token != NULL) {
                 int val = atoi(token);
                 if (val >= 1 && val <= 10) {
-                    channels[val - 1] = true;
+                    channel_mask |= (1 << (val - 1));
                 } else {
                     printf("Error: channel must be 1-10 or 'all'\n");
                     free(temp);
@@ -340,10 +338,10 @@ static int do_ad5933_sweep(int argc, char **argv) {
         .interval_ms = interval_ms,
         .average_times = average_times,
         .override_channel = override_ch,
+        .channel_mask = channel_mask,
         .serial_plot = serial_plot,
         .test_mode = test_mode,
     };
-    memcpy(params.channels, channels, sizeof(params.channels));
 
     extern esp_event_loop_handle_t service_event_loop;
     esp_err_t err = esp_event_post_to(
