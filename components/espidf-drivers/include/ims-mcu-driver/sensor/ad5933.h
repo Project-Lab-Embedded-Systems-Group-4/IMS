@@ -120,7 +120,6 @@ struct ad5933_sweep_params {
     bool continuous;
     int interval_ms;
     int average_times;
-    bool override_channel;
     uint16_t channel_mask;
     bool serial_plot;
     bool test_mode;

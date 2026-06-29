@@ -309,11 +309,13 @@ static int do_ad5933_sweep(int argc, char **argv) {
     int average_times = sweep_args.average->count > 0 ? sweep_args.average->ival[0] : 1;
     const char *sweep_channel = sweep_args.channel->count > 0 ? sweep_args.channel->sval[0] : "";
 
-    bool override_ch = false;
+    if (strlen(sweep_channel) == 0) {
+        printf("Error: --ch option is mandatory. Please provide a channel or 'all' (e.g. --ch 1,2,3 or --ch all).\n");
+        return 1;
+    }
+
     uint16_t channel_mask = 0;
-    if (strlen(sweep_channel) > 0) {
-        override_ch = true;
-        if (strcmp(sweep_channel, "all") == 0) {
+    if (strcmp(sweep_channel, "all") == 0) {
             channel_mask = 0x3FF; // 10 bits set
         } else {
             char *temp = strdup(sweep_channel);
@@ -331,13 +333,11 @@ static int do_ad5933_sweep(int argc, char **argv) {
             }
             free(temp);
         }
-    }
 
     struct ad5933_sweep_params params = {
         .continuous = continuous,
         .interval_ms = interval_ms,
         .average_times = average_times,
-        .override_channel = override_ch,
         .channel_mask = channel_mask,
         .serial_plot = serial_plot,
         .test_mode = test_mode,

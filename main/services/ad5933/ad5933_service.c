@@ -100,7 +100,6 @@ struct ad5933_service_data {
     bool stop_requested;
     double offsets[AD5933_MAX_CHANNELS];
     uint32_t offset_freqs[AD5933_MAX_CHANNELS];
-    bool override_channel;
     uint16_t channel_mask;
     int current_sweep_channel;
     double continuous_avg_real[AD5933_MAX_CHANNELS];
@@ -154,14 +153,7 @@ static int ad5933_poll_data_ready(const struct ims_device *ad_dev, uint32_t time
 }
 
 static void handle_continuous_data_ready(struct ad5933_service_data *data, uint32_t start_freq, const struct board_utils_info *board_info) {
-    uint16_t show_ch_mask = 0;
-    if (data->override_channel) {
-        show_ch_mask = data->channel_mask;
-    } else {
-        if (board_info->subj_channel >= 0 && board_info->subj_channel < AD5933_MAX_CHANNELS) {
-            show_ch_mask = (1 << board_info->subj_channel);
-        }
-    }
+    uint16_t show_ch_mask = data->channel_mask;
 
     if (!data->continuous_header_printed && !data->serial_plot) {
         printf("\r\n%-5s", "Index");
@@ -261,20 +253,14 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 data->continuous = params->continuous;
                 data->interval_ms = params->interval_ms;
                 data->average_times = params->average_times;
-                data->override_channel = params->override_channel;
                 data->serial_plot = params->serial_plot;
                 data->test_mode = params->test_mode;
                 data->channel_mask = params->channel_mask;
-                if (params->override_channel) {
-                    data->current_sweep_channel = get_first_channel(data->channel_mask);
-                } else {
-                    data->current_sweep_channel = -1;
-                }
+                data->current_sweep_channel = get_first_channel(data->channel_mask);
             } else {
                 data->continuous = false;
                 data->interval_ms = 1000;
                 data->average_times = 1;
-                data->override_channel = false;
                 data->serial_plot = false;
                 data->test_mode = false;
                 data->channel_mask = 0;
@@ -309,9 +295,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
 
             data->is_calibrating = true;
             data->continuous = false;
-            data->interval_ms = 1000;
+            data->interval_ms = 100;
             data->average_times = 1;
-            data->override_channel = false;
             data->channel_mask = 0;
             data->current_sweep_channel = -1;
             xSemaphoreGive(data->start_sem);
@@ -420,7 +405,7 @@ static uint32_t handle_state_standby(struct ad5933_service_data *data, const str
     data->sample_count = 0;
     xSemaphoreGive(data->data_mutex);
 
-    if (data->override_channel && data->current_sweep_channel >= 0) {
+    if (data->current_sweep_channel >= 0) {
         board_set_subj_channel((enum board_subj_channel)data->current_sweep_channel);
     }
     board_measure_enable(true);
@@ -479,11 +464,6 @@ static uint32_t handle_state_read_data(struct ad5933_service_data *data, const s
         board_measure_enable(false);
         board_utils_unlock();
 
-        if (data->stop_requested) {
-            data->continuous = false;
-            data->stop_requested = false;
-        }
-
         if (data->continuous) {
             double sum_real = 0;
             double sum_imag = 0;
@@ -493,35 +473,37 @@ static uint32_t handle_state_read_data(struct ad5933_service_data *data, const s
             }
             struct board_utils_info board_info;
             board_utils_get_info(&board_info);
-            int current_ch = data->override_channel ? data->current_sweep_channel : board_info.subj_channel;
+            int current_ch = data->current_sweep_channel >= 0 ? data->current_sweep_channel : board_info.subj_channel;
             if (current_ch >= 0 && current_ch < AD5933_MAX_CHANNELS) {
                 data->continuous_avg_real[current_ch] = data->sample_count > 0 ? (sum_real / data->sample_count) : 0;
                 data->continuous_avg_imag[current_ch] = data->sample_count > 0 ? (sum_imag / data->sample_count) : 0;
             }
 
-            if (data->override_channel && data->current_sweep_channel >= 0) {
+            if (data->current_sweep_channel >= 0) {
                 int next_ch = get_next_channel(data->channel_mask, data->current_sweep_channel);
                 if (next_ch == -1) {
-                    next_ch = get_first_channel(data->channel_mask);
+                    post_data_ready_event(data, cfg);
+                    
+                    if (data->stop_requested) {
+                        data->continuous = false;
+                        data->stop_requested = false;
+                        data->now_state = AD5933_STATE_IDLE;
+                        return 0;
+                    }
+
                     if (data->interval_ms > 0) {
                         vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
                     }
-                    post_data_ready_event(data, cfg);
+                    next_ch = get_first_channel(data->channel_mask);
                 }
                 data->current_sweep_channel = next_ch;
-            } else {
-                post_data_ready_event(data, cfg);
-
-                if (data->interval_ms > 0) {
-                    vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
-                }
             }
             data->now_state = AD5933_STATE_IDLE;
             xSemaphoreGive(data->start_sem);
         } else {
             post_data_ready_event(data, cfg);
                               
-            if (data->override_channel && data->current_sweep_channel >= 0) {
+            if (data->current_sweep_channel >= 0) {
                 int next_ch = get_next_channel(data->channel_mask, data->current_sweep_channel);
                 if (next_ch != -1) {
                     data->current_sweep_channel = next_ch;
@@ -762,8 +744,7 @@ esp_err_t ad5933_service_init(struct service *s,
     data->cal_fb_index = AD5933_CALI_FB_INDEX;
     data->cal_channel = AD5933_CALI_CHANNEL;
     data->cal_resistor = AD5933_CALI_RESISTOR;
-    data->is_calibrating = true;
-    xSemaphoreGive(data->start_sem);
+    data->is_calibrating = false;
 
     s->api = &ad5933_api;
     s->config = config;
