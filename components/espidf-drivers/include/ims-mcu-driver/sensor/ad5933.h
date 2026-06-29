@@ -122,6 +122,8 @@ struct ad5933_sweep_params {
     int average_times;
     bool override_channel;
     bool channels[10];
+    bool serial_plot;
+    bool test_mode;
 };
 
 struct ad5933_data_ready_params {

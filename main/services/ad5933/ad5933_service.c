@@ -16,6 +16,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include <esp_random.h>
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -103,6 +105,8 @@ struct ad5933_service_data {
     bool continuous_channel_measured[10];
     uint32_t continuous_sweep_index;
     bool continuous_header_printed;
+    bool serial_plot;
+    bool test_mode;
 };
 
 static struct service *g_ad5933_srv = NULL;
@@ -141,6 +145,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 data->interval_ms = params->interval_ms;
                 data->average_times = params->average_times;
                 data->override_channel = params->override_channel;
+                data->serial_plot = params->serial_plot;
+                data->test_mode = params->test_mode;
                 memcpy(data->channels, params->channels, sizeof(data->channels));
                 if (params->override_channel) {
                     data->current_sweep_channel = get_first_channel(data->channels);
@@ -152,6 +158,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                 data->interval_ms = 1000;
                 data->average_times = 1;
                 data->override_channel = false;
+                data->serial_plot = false;
+                data->test_mode = false;
                 memset(data->channels, 0, sizeof(data->channels));
                 data->current_sweep_channel = -1;
             }
@@ -280,7 +288,7 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     data->continuous_channel_measured[board_info.subj_channel] = true;
                 }
 
-                if (!data->continuous_header_printed) {
+                if (!data->continuous_header_printed && !data->serial_plot) {
                     printf("\r\n%-5s", "Index");
                     for (int ch = 0; ch < 10; ch++) {
                         if (show_ch[ch]) {
@@ -311,18 +319,38 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
 
                 if (all_measured) {
                     data->continuous_sweep_index++;
-                    printf("%-5" PRIu32, data->continuous_sweep_index);
-                    for (int ch = 0; ch < 10; ch++) {
-                        if (show_ch[ch]) {
-                            double val = data->continuous_impedances[ch];
-                            if (isinf(val)) {
-                                printf(" | %-11s", "inf");
-                            } else {
-                                printf(" | %-11.3f", val);
+                    if (data->serial_plot) {
+                        bool first = true;
+                        for (int ch = 0; ch < 10; ch++) {
+                            if (show_ch[ch]) {
+                                if (!first) printf(",");
+                                double val = data->continuous_impedances[ch];
+                                if (data->test_mode) {
+                                    val = 300.0 + (double)(esp_random() % 15000) / 100.0;
+                                }
+                                if (isinf(val)) {
+                                    printf("inf");
+                                } else {
+                                    printf("%.2f", val);
+                                }
+                                first = false;
                             }
                         }
+                        printf("\n");
+                    } else {
+                        printf("%-5" PRIu32, data->continuous_sweep_index);
+                        for (int ch = 0; ch < 10; ch++) {
+                            if (show_ch[ch]) {
+                                double val = data->continuous_impedances[ch];
+                                if (isinf(val)) {
+                                    printf(" | %-11s", "inf");
+                                } else {
+                                    printf(" | %-11.3f", val);
+                                }
+                            }
+                        }
+                        printf("\r\n");
                     }
-                    printf("\r\n");
                     fflush(stdout);
                     memset(data->continuous_channel_measured, 0, sizeof(data->continuous_channel_measured));
                 }

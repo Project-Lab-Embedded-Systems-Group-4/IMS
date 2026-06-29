@@ -62,6 +62,8 @@ static struct {
     struct arg_int *interval;
     struct arg_int *average;
     struct arg_str *channel;
+    struct arg_lit *serial_plot;
+    struct arg_lit *test_mode;
     struct arg_end *end;
 } sweep_args;
 
@@ -290,6 +292,19 @@ static int do_ad5933_sweep(int argc, char **argv) {
     }
 
     bool continuous = sweep_args.continuous->count > 0;
+    bool serial_plot = sweep_args.serial_plot->count > 0;
+    bool test_mode = sweep_args.test_mode->count > 0;
+    
+    if (serial_plot && !continuous) {
+        printf("Error: -s/--serial-plot option can only be used in continuous mode (-c).\n");
+        return 1;
+    }
+
+    if (test_mode && !serial_plot) {
+        printf("Error: -t/--test option can only be used with serial plot mode (-s).\n");
+        return 1;
+    }
+
     int interval_ms = sweep_args.interval->count > 0 ? sweep_args.interval->ival[0] : 1000;
     int average_times = sweep_args.average->count > 0 ? sweep_args.average->ival[0] : 1;
     const char *sweep_channel = sweep_args.channel->count > 0 ? sweep_args.channel->sval[0] : "";
@@ -325,6 +340,8 @@ static int do_ad5933_sweep(int argc, char **argv) {
         .interval_ms = interval_ms,
         .average_times = average_times,
         .override_channel = override_ch,
+        .serial_plot = serial_plot,
+        .test_mode = test_mode,
     };
     memcpy(params.channels, channels, sizeof(params.channels));
 
@@ -334,7 +351,9 @@ static int do_ad5933_sweep(int argc, char **argv) {
         &params, sizeof(params), portMAX_DELAY);
     if (err == ESP_OK) {
         if (continuous) {
-            printf("Continuous sweep started (interval: %d ms, avg: %d). Press ENTER to stop...\n", interval_ms, average_times);
+            if (!serial_plot) {
+                printf("Continuous sweep started (interval: %d ms, avg: %d). Press ENTER to stop...\n", interval_ms, average_times);
+            }
             while (1) {
                 int c = getchar();
                 if (c == '\n' || c == '\r') {
@@ -753,7 +772,9 @@ esp_err_t register_ad5933_command(void) {
     sweep_args.interval = arg_int0("i", "interval", "<ms>", "Interval between continuous sweeps (default: 1000)");
     sweep_args.average = arg_int0("a", "average", "<count>", "Number of points to sweep and average");
     sweep_args.channel = arg_str0(NULL, "ch", "<1-10|all>", "Subject channel or all channels to sweep (when select more than one channel it should be --ch 1, 2, ...)");
-    sweep_args.end = arg_end(5);
+    sweep_args.serial_plot = arg_lit0("s", "serial-plot", "Output comma-separated floats for serial plotting");
+    sweep_args.test_mode = arg_lit0("t", "test", "Test mode: send random values for serial plot");
+    sweep_args.end = arg_end(7);
 
     cal_args.fb = arg_int0("f", "fb", "<0-3>", "ZM Feedback index (0:2k, 1:10k, 2:100k, 3:330k)");
     cal_args.end = arg_end(2);
