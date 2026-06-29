@@ -101,8 +101,8 @@ struct ad5933_service_data {
     bool override_channel;
     bool channels[10];
     int current_sweep_channel;
-    double continuous_impedances[10];
-    bool continuous_channel_measured[10];
+    double continuous_avg_real[10];
+    double continuous_avg_imag[10];
     uint32_t continuous_sweep_index;
     bool continuous_header_printed;
     bool serial_plot;
@@ -137,8 +137,8 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
             data->stop_requested = false;
             data->continuous_sweep_index = 0;
             data->continuous_header_printed = false;
-            memset(data->continuous_channel_measured, 0, sizeof(data->continuous_channel_measured));
-            memset(data->continuous_impedances, 0, sizeof(data->continuous_impedances));
+            memset(data->continuous_avg_real, 0, sizeof(data->continuous_avg_real));
+            memset(data->continuous_avg_imag, 0, sizeof(data->continuous_avg_imag));
             if (event_data != NULL) {
                 struct ad5933_sweep_params *params = (struct ad5933_sweep_params *)event_data;
                 data->continuous = params->continuous;
@@ -246,34 +246,6 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
             ad5933_get_start_freq(ad_dev, &start_freq);
 
             if (was_continuous) {
-                double sum_real = 0;
-                double sum_imag = 0;
-                for (int i = 0; i < data->sample_count; i++) {
-                    sum_real += data->samples[i].real;
-                    sum_imag += data->samples[i].imag;
-                }
-                double avg_real = data->sample_count > 0 ? (sum_real / data->sample_count) : 0;
-                double avg_imag = data->sample_count > 0 ? (sum_imag / data->sample_count) : 0;
-                double magnitude = sqrt(avg_real * avg_real + avg_imag * avg_imag);
-
-                double gf = data->gain_factors[0];
-                double impedance = 0;
-                if (gf != 0 && magnitude != 0) {
-                    double raw_impedance = 1.0 / (gf * magnitude);
-                    if (offset > 0.0 && start_freq > 0) {
-                        double f = (double)start_freq;
-                        double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
-                        double C_corrected_pf = C_pF - offset;
-                        if (C_corrected_pf > 0.0) {
-                            impedance = 1e12 / (2.0 * M_PI * f * C_corrected_pf);
-                        } else {
-                            impedance = INFINITY;
-                        }
-                    } else {
-                        impedance = raw_impedance;
-                    }
-                }
-
                 bool show_ch[10] = {false};
                 if (data->override_channel) {
                     memcpy(show_ch, data->channels, sizeof(show_ch));
@@ -281,11 +253,6 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
                         show_ch[board_info.subj_channel] = true;
                     }
-                }
-
-                if (board_info.subj_channel >= 0 && board_info.subj_channel <= 9) {
-                    data->continuous_impedances[board_info.subj_channel] = impedance;
-                    data->continuous_channel_measured[board_info.subj_channel] = true;
                 }
 
                 if (!data->continuous_header_printed && !data->serial_plot) {
@@ -307,53 +274,72 @@ static void ad5933_event_handler(void *arg, esp_event_base_t base,
                     data->continuous_header_printed = true;
                 }
 
-                bool all_measured = true;
-                for (int ch = 0; ch < 10; ch++) {
-                    if (show_ch[ch]) {
-                        if (!data->continuous_channel_measured[ch]) {
-                            all_measured = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (all_measured) {
-                    data->continuous_sweep_index++;
-                    if (data->serial_plot) {
-                        bool first = true;
-                        for (int ch = 0; ch < 10; ch++) {
-                            if (show_ch[ch]) {
-                                if (!first) printf(",");
-                                double val = data->continuous_impedances[ch];
-                                if (data->test_mode) {
-                                    val = 300.0 + (double)(esp_random() % 15000) / 100.0;
-                                }
-                                if (isinf(val)) {
-                                    printf("inf");
+                data->continuous_sweep_index++;
+                if (data->serial_plot) {
+                    bool first = true;
+                    for (int ch = 0; ch < 10; ch++) {
+                        if (show_ch[ch]) {
+                            if (!first) printf(",");
+                            double avg_real = data->continuous_avg_real[ch];
+                            double avg_imag = data->continuous_avg_imag[ch];
+                            double magnitude = sqrt(avg_real * avg_real + avg_imag * avg_imag);
+                            double gf = data->gain_factors[0];
+                            double impedance = 0;
+                            double offset = data->offsets[ch];
+                            if (gf != 0 && magnitude != 0) {
+                                double raw_impedance = 1.0 / (gf * magnitude);
+                                if (offset > 0.0 && start_freq > 0) {
+                                    double f = (double)start_freq;
+                                    double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
+                                    double C_corrected = C_pF - offset;
+                                    impedance = C_corrected > 0.0 ? 1e12 / (2.0 * M_PI * f * C_corrected) : INFINITY;
                                 } else {
-                                    printf("%.2f", val);
-                                }
-                                first = false;
-                            }
-                        }
-                        printf("\n");
-                    } else {
-                        printf("%-5" PRIu32, data->continuous_sweep_index);
-                        for (int ch = 0; ch < 10; ch++) {
-                            if (show_ch[ch]) {
-                                double val = data->continuous_impedances[ch];
-                                if (isinf(val)) {
-                                    printf(" | %-11s", "inf");
-                                } else {
-                                    printf(" | %-11.3f", val);
+                                    impedance = raw_impedance;
                                 }
                             }
+                            if (data->test_mode) {
+                                impedance = 300.0 + (double)(esp_random() % 15000) / 100.0;
+                            }
+                            if (isinf(impedance)) {
+                                printf("inf");
+                            } else {
+                                printf("%.2f", impedance);
+                            }
+                            first = false;
                         }
-                        printf("\r\n");
                     }
-                    fflush(stdout);
-                    memset(data->continuous_channel_measured, 0, sizeof(data->continuous_channel_measured));
+                    printf("\n");
+                } else {
+                    printf("%-5" PRIu32, data->continuous_sweep_index);
+                    for (int ch = 0; ch < 10; ch++) {
+                        if (show_ch[ch]) {
+                            double avg_real = data->continuous_avg_real[ch];
+                            double avg_imag = data->continuous_avg_imag[ch];
+                            double magnitude = sqrt(avg_real * avg_real + avg_imag * avg_imag);
+                            double gf = data->gain_factors[0];
+                            double impedance = 0;
+                            double offset = data->offsets[ch];
+                            if (gf != 0 && magnitude != 0) {
+                                double raw_impedance = 1.0 / (gf * magnitude);
+                                if (offset > 0.0 && start_freq > 0) {
+                                    double f = (double)start_freq;
+                                    double C_pF = 1e12 / (2.0 * M_PI * f * raw_impedance);
+                                    double C_corrected = C_pF - offset;
+                                    impedance = C_corrected > 0.0 ? 1e12 / (2.0 * M_PI * f * C_corrected) : INFINITY;
+                                } else {
+                                    impedance = raw_impedance;
+                                }
+                            }
+                            if (isinf(impedance)) {
+                                printf(" | %-11s", "inf");
+                            } else {
+                                printf(" | %-11.3f", impedance);
+                            }
+                        }
+                    }
+                    printf("\r\n");
                 }
+                fflush(stdout);
             } else {
                 printf("\n\n%-5s | %-10s | %-10s | %-12s | %-12s | %-15s\n", "Index", "Real",
                        "Imag", "Magnitude", "Gain Factor", "Impedance (Ohm)");
@@ -474,7 +460,7 @@ static void ad5933_service_task(void *arg) {
             ad5933_set_ctrl_reg1(ad_dev, ctrl1);
 
             // TODO: Add timeout handling here
-            delay_ms = 100;
+            delay_ms = 10;
             data->now_state = AD5933_STATE_SWEEPING;
             break;
 
@@ -537,31 +523,65 @@ static void ad5933_service_task(void *arg) {
                 board_measure_enable(false);
                 board_utils_unlock();
 
-                struct ad5933_data_ready_params ready_params = {
-                    .is_cal = data->is_calibrating,
-                    .is_continuous = data->continuous,
-                };
-                esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
-                                  IMS_EVENT_AD5933_DATA_READY, &ready_params,
-                                  sizeof(ready_params), portMAX_DELAY);
-
                 if (data->stop_requested) {
                     data->continuous = false;
                     data->stop_requested = false;
                 }
 
                 if (data->continuous) {
+                    double sum_real = 0;
+                    double sum_imag = 0;
+                    for (int i = 0; i < data->sample_count; i++) {
+                        sum_real += data->samples[i].real;
+                        sum_imag += data->samples[i].imag;
+                    }
+                    struct board_utils_info board_info;
+                    board_utils_get_info(&board_info);
+                    int current_ch = data->override_channel ? data->current_sweep_channel : board_info.subj_channel;
+                    if (current_ch >= 0 && current_ch <= 9) {
+                        data->continuous_avg_real[current_ch] = data->sample_count > 0 ? (sum_real / data->sample_count) : 0;
+                        data->continuous_avg_imag[current_ch] = data->sample_count > 0 ? (sum_imag / data->sample_count) : 0;
+                    }
+
                     if (data->override_channel && data->current_sweep_channel >= 0) {
                         int next_ch = get_next_channel(data->channels, data->current_sweep_channel);
                         if (next_ch == -1) {
                             next_ch = get_first_channel(data->channels);
+                            if (data->interval_ms > 0) {
+                                vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
+                            }
+                            struct ad5933_data_ready_params ready_params = {
+                                .is_cal = data->is_calibrating,
+                                .is_continuous = data->continuous,
+                            };
+                            esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
+                                              IMS_EVENT_AD5933_DATA_READY, &ready_params,
+                                              sizeof(ready_params), portMAX_DELAY);
                         }
                         data->current_sweep_channel = next_ch;
+                    } else {
+                        if (data->interval_ms > 0) {
+                            vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
+                        }
+                        struct ad5933_data_ready_params ready_params = {
+                            .is_cal = data->is_calibrating,
+                            .is_continuous = data->continuous,
+                        };
+                        esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
+                                          IMS_EVENT_AD5933_DATA_READY, &ready_params,
+                                          sizeof(ready_params), portMAX_DELAY);
                     }
-                    vTaskDelay(pdMS_TO_TICKS(data->interval_ms));
                     data->now_state = AD5933_STATE_IDLE;
                     xSemaphoreGive(data->start_sem);
                 } else {
+                    struct ad5933_data_ready_params ready_params = {
+                        .is_cal = data->is_calibrating,
+                        .is_continuous = data->continuous,
+                    };
+                    esp_event_post_to(cfg->loop, IMS_EVENT_BASE,
+                                      IMS_EVENT_AD5933_DATA_READY, &ready_params,
+                                      sizeof(ready_params), portMAX_DELAY);
+                                      
                     if (data->override_channel && data->current_sweep_channel >= 0) {
                         int next_ch = get_next_channel(data->channels, data->current_sweep_channel);
                         if (next_ch != -1) {
